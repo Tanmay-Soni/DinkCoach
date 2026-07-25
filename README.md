@@ -9,6 +9,7 @@ DinkAI is a browser-based pickleball dink coaching prototype. It continuously tr
 - Starts a local webcam feed and draws pose landmarks over it.
 - Counts a likely dink contact when a fresh ball approaches the calibrated paddle and then reverses away from it.
 - Batches four likely contacts into one player-facing review of ready position, contact spacing, and swing consistency.
+- Synthesizes a post-session "average dink" avatar: a median-composite skeleton of the player's own dink across the session, rendered as a volumetric body with recurring faults highlighted (see [Average dink avatar](#average-dink-avatar)).
 - Scores a ready position from visible shoulders, hips, knees, ankles, and wrists.
 - Shows posture, motion, action, and landmark-debug data.
 - Detects a possible paddle near the selected wrist using a calibrated color profile.
@@ -52,6 +53,19 @@ npm run preview  # serve a completed production bundle
 5. Watch the “Four-Hit Dink Review” counter. After its fourth dot, use the completed review to guide the next sequence; live tracking continues immediately with a new batch.
 6. Treat the coach score as a prompt for practice, not a definitive assessment. Check that the visible skeleton tracks the player before trusting the result.
 
+## Average dink avatar
+
+Once a session has enough clean dink contacts, DinkAI builds a **composite "average dink" avatar** and shows it in the summary, below the four-hit review. It is diagnostic — the player's own averaged form, not a reference model to copy.
+
+How it works:
+
+1. Every pose frame is buffered; when the contact detector reports a dink hit, a short window of frames around that contact is sliced out as a "rep" (`src/lib/avatar/poseHitRecorder.js`).
+2. Low-confidence/occluded reps are dropped, each rep is resampled onto a contact-anchored slot grid, and the reps are combined per joint with a median (`normalize.js` → `average.js` → `composite.js`).
+3. Faults that recur across ≥30% of the session's reps (poor knee bend, long backswing, paddle too low, off balance) are highlighted on the composite (`faults.js`).
+4. The composite is drawn as a fleshed-out body — head, torso, tapered capsule limbs, joint markers, pulsing fault rings — by a custom Canvas2D renderer, not MediaPipe's thin wireframe (`src/components/avatarBodyRenderer.js`, played by `CompositeAvatarPlayer.jsx` inside `AverageDinkAvatarPanel.jsx`).
+
+Full design notes and tuning parameters are in [docs/AVERAGE_DINK_AVATAR.md](docs/AVERAGE_DINK_AVATAR.md). The pipeline is pure and unit-tested (`test/avatarComposite.test.js`).
+
 ## Architecture
 
 The application is deliberately client-only:
@@ -64,6 +78,8 @@ Webcam → MediaPipe Pose Landmarker → normalized landmarks → coaching/motio
 - `src/App.jsx` owns camera lifecycle, model loading, rendering, trackers, and the current prototype UI.
 - `src/lib/geometry.js` contains reusable, tested validation and measurement primitives for normalized landmarks.
 - `src/lib/dinkReview.js` defines conservative contact qualification and four-hit review aggregation.
+- `src/lib/avatar/` builds the post-session composite avatar from recorded reps (recorder, normalization, median averaging, fault aggregation).
+- `src/components/` holds the composite avatar renderer and its React player/panel.
 - `test/` contains Node’s built-in test runner tests; it does not require a browser or webcam.
 - `docs/ARCHITECTURE.md` records runtime boundaries and the intended extraction path.
 
