@@ -19,10 +19,11 @@ export default function OnboardingFlow({ onComplete }) {
   const lesson = isLesson ? LESSON_SECTIONS[step - 1] : null;
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 sm:p-8">
+      <section className="w-full sm:w-[80%] max-w-5xl overflow-hidden rounded-3xl bg-white shadow-xl shadow-slate-900/10 ring-1 ring-slate-200 flex flex-col">
       {/* ── Top bar: back button + progress dots (lesson steps) + skip (all but complete) ── */}
       {step !== COMPLETE_STEP && (
-        <div className="px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-2">
+        <div className="px-6 sm:px-10 pt-[max(1rem,env(safe-area-inset-top))] pb-2">
           {isLesson && (
             <div className="flex items-center gap-3">
               <button
@@ -57,7 +58,7 @@ export default function OnboardingFlow({ onComplete }) {
       )}
 
       {/* ── Step content ── */}
-      <div className="flex-1 flex flex-col justify-center px-6 pb-6">
+      <div className="flex-1 flex flex-col justify-center px-6 sm:px-10 py-6 sm:py-10">
         <AnimatePresence mode="wait">
           {step === WELCOME_STEP && (
             <motion.div
@@ -66,7 +67,7 @@ export default function OnboardingFlow({ onComplete }) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="flex flex-col items-center text-center gap-3"
+              className="w-full max-w-4xl mx-auto flex flex-col items-center text-center gap-3"
             >
               <div className="w-16 h-16 rounded-3xl bg-lime-400 flex items-center justify-center text-3xl mb-2 shadow-sm">
                 🏓
@@ -87,7 +88,7 @@ export default function OnboardingFlow({ onComplete }) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="flex flex-col gap-4"
+              className="w-full max-w-4xl mx-auto flex flex-col gap-4"
             >
               <div>
                 <p className="text-xs font-semibold text-lime-600 uppercase tracking-widest mb-1">
@@ -109,7 +110,7 @@ export default function OnboardingFlow({ onComplete }) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="flex flex-col items-center text-center gap-3"
+              className="w-full max-w-4xl mx-auto flex flex-col items-center text-center gap-3"
             >
               <CircleCheck className="w-16 h-16 text-lime-500" strokeWidth={1.5} />
               <h1 className="text-2xl font-bold text-slate-900 tracking-tight">You&apos;re ready</h1>
@@ -122,7 +123,7 @@ export default function OnboardingFlow({ onComplete }) {
       </div>
 
       {/* ── Bottom action ── */}
-      <div className="px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      <div className="w-full max-w-4xl mx-auto px-6 sm:px-10 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <button
           onClick={step === COMPLETE_STEP ? onComplete : goNext}
           className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3.5 rounded-2xl transition-colors text-sm"
@@ -130,6 +131,7 @@ export default function OnboardingFlow({ onComplete }) {
           {step === COMPLETE_STEP ? "Let's get started" : 'Next'}
         </button>
       </div>
+      </section>
     </div>
   );
 }

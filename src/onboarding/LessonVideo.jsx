@@ -15,11 +15,11 @@ export default function LessonVideo({ section }) {
   }, [section.videoSrc]);
 
   return (
-    <div className="w-full aspect-video rounded-2xl overflow-hidden bg-black shadow-sm">
+    <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-black shadow-sm">
       <video
         key={section.videoSrc}
         ref={videoRef}
-        className="w-full h-full object-cover"
+        className="w-full h-full object-contain transform-none"
         src={section.videoSrc}
         playsInline
         controls={false}
