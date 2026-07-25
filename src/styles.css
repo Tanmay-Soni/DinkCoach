@@ -1,3 +1,8 @@
+/* No preflight: this file's existing rules (body, button, h1-h3, etc.) already
+   style the coach app; Tailwind's reset would fight them. Utilities only. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 :root {
   color: #17202e;
   background: #f4f7fb;
