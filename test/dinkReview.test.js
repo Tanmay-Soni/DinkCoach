@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   HITS_PER_DINK_REVIEW,
   createDinkReview,
+  createSessionDinkReview,
   getDinkContactUpdate,
 } from '../src/lib/dinkReview.js';
 
@@ -67,4 +68,25 @@ test('creates a player-facing review only after four hits', () => {
   assert.equal(review.hitCount, 4);
   assert.ok(review.score >= 80);
   assert.match(review.tips.join(' '), /ready position/i);
+});
+
+test('accumulates each completed four-hit review into a session summary', () => {
+  const firstReview = {
+    score: 70,
+    averageReadyScore: 68,
+    averageContactDistance: 0.1,
+    velocityVariation: 0.2,
+  };
+  const secondReview = {
+    score: 82,
+    averageReadyScore: 78,
+    averageContactDistance: 0.08,
+    velocityVariation: 0.12,
+  };
+
+  const session = createSessionDinkReview([firstReview, secondReview]);
+  assert.equal(session.reviewCount, 2);
+  assert.equal(session.hitCount, 8);
+  assert.equal(session.averageScore, 76);
+  assert.equal(session.scoreTrend, 'improving');
 });

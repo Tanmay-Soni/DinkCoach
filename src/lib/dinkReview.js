@@ -188,3 +188,44 @@ export function createDinkReview(hits) {
     tips,
   };
 }
+
+/**
+ * Keeps completed four-hit reviews in one session-level summary. Each new
+ * batch remains available as its own review while the session numbers show
+ * the player's accumulated pattern across 4, 8, 12, and later hits.
+ */
+export function createSessionDinkReview(reviews) {
+  if (!reviews.length) {
+    return null;
+  }
+
+  const scores = reviews.map((review) => review.score).filter(Number.isFinite);
+  const readyScores = reviews
+    .map((review) => review.averageReadyScore)
+    .filter(Number.isFinite);
+  const contactDistances = reviews
+    .map((review) => review.averageContactDistance)
+    .filter(Number.isFinite);
+  const velocityVariations = reviews
+    .map((review) => review.velocityVariation)
+    .filter(Number.isFinite);
+  const firstScore = scores[0];
+  const latestScore = scores[scores.length - 1];
+
+  return {
+    reviewCount: reviews.length,
+    hitCount: reviews.length * HITS_PER_DINK_REVIEW,
+    averageScore: Math.round(average(scores)),
+    averageReadyScore: average(readyScores),
+    averageContactDistance: average(contactDistances),
+    averageVelocityVariation: average(velocityVariations),
+    scoreTrend:
+      scores.length < 2
+        ? 'first review'
+        : latestScore > firstScore + 3
+          ? 'improving'
+          : latestScore < firstScore - 3
+            ? 'needs attention'
+            : 'steady',
+  };
+}

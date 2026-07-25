@@ -18,6 +18,7 @@ import {
 import {
   HITS_PER_DINK_REVIEW,
   createDinkReview,
+  createSessionDinkReview,
   getDinkContactUpdate,
 } from './lib/dinkReview.js';
 
@@ -1573,14 +1574,18 @@ function getReadyPositionAnalysis(landmarks, measurements) {
   };
 }
 
-function getSpokenReview(review) {
+function getSpokenReview(review, sessionReview) {
   if (!review) {
     return 'DinkAI voice reviews are ready. Complete four likely dink contacts to receive a review.';
   }
 
-  return `Four-hit dink review. Your score is ${review.score} out of 100. ${review.tips
+  const sessionSummary = sessionReview
+    ? ` Across ${sessionReview.hitCount} hits, your session average is ${sessionReview.averageScore} and the trend is ${sessionReview.scoreTrend}.`
+    : '';
+
+  return `Four-hit dink review number ${review.batchNumber}. Your score is ${review.score} out of 100. ${review.tips
     .slice(0, 2)
-    .join(' ')}`;
+    .join(' ')}${sessionSummary}`;
 }
 
 function speakWithBrowserVoice(text) {
@@ -1656,6 +1661,7 @@ function App() {
   const colorBallTrackingTimeoutRef = useRef(null);
   const isBallDetectionStoppedRef = useRef(false);
   const dinkHitBatchRef = useRef([]);
+  const dinkReviewHistoryRef = useRef([]);
   const lastDinkHitAtRef = useRef(0);
   const pendingDinkContactRef = useRef(null);
   const lastVoiceReviewRef = useRef(null);
@@ -1669,6 +1675,7 @@ function App() {
   const [heldSwing, setHeldSwing] = useState(null);
   const [dinkHitBatch, setDinkHitBatch] = useState([]);
   const [latestDinkReview, setLatestDinkReview] = useState(null);
+  const [dinkReviewHistory, setDinkReviewHistory] = useState([]);
   const [ballDebug, setBallDebug] = useState(INITIAL_BALL_DEBUG);
   const [paddleDebug, setPaddleDebug] = useState(INITIAL_PADDLE_DEBUG);
   const [pixelSample, setPixelSample] = useState(INITIAL_PIXEL_SAMPLE);
@@ -1713,6 +1720,10 @@ function App() {
   const actionDetection = useMemo(
     () => getActionDetection(motionSnapshot, heldSwing),
     [motionSnapshot, heldSwing],
+  );
+  const sessionDinkReview = useMemo(
+    () => createSessionDinkReview(dinkReviewHistory),
+    [dinkReviewHistory],
   );
   const activeCalibrationProfile =
     calibrationTarget === 'paddle' ? paddleColorProfile : colorProfile;
@@ -1774,24 +1785,27 @@ function App() {
   }, []);
 
   const handleVoiceTest = useCallback(() => {
-    playVoiceReview(getSpokenReview(latestDinkReview));
-  }, [latestDinkReview, playVoiceReview]);
+    playVoiceReview(getSpokenReview(latestDinkReview, sessionDinkReview));
+  }, [latestDinkReview, playVoiceReview, sessionDinkReview]);
 
   useEffect(() => {
     if (latestDinkReview && lastVoiceReviewRef.current !== latestDinkReview) {
       lastVoiceReviewRef.current = latestDinkReview;
       if (voiceReviewsEnabled) {
-        playVoiceReview(getSpokenReview(latestDinkReview));
+        playVoiceReview(getSpokenReview(latestDinkReview, sessionDinkReview));
       }
     }
-  }, [latestDinkReview, playVoiceReview, voiceReviewsEnabled]);
+  }, [latestDinkReview, playVoiceReview, sessionDinkReview, voiceReviewsEnabled]);
 
   const resetDinkReview = useCallback(() => {
     dinkHitBatchRef.current = [];
+    dinkReviewHistoryRef.current = [];
     lastDinkHitAtRef.current = 0;
     pendingDinkContactRef.current = null;
+    lastVoiceReviewRef.current = null;
     setDinkHitBatch([]);
     setLatestDinkReview(null);
+    setDinkReviewHistory([]);
   }, []);
 
   const recordDinkHit = useCallback((candidate, landmarks) => {
@@ -1807,7 +1821,16 @@ function App() {
     lastDinkHitAtRef.current = candidate.timestamp;
 
     if (nextBatch.length === HITS_PER_DINK_REVIEW) {
-      setLatestDinkReview(createDinkReview(nextBatch));
+      const review = createDinkReview(nextBatch);
+      const nextReviewHistory = [...dinkReviewHistoryRef.current, review];
+      const numberedReview = {
+        ...review,
+        batchNumber: nextReviewHistory.length,
+      };
+
+      dinkReviewHistoryRef.current = nextReviewHistory;
+      setDinkReviewHistory(nextReviewHistory);
+      setLatestDinkReview(numberedReview);
       dinkHitBatchRef.current = [];
       setDinkHitBatch([]);
       return;
@@ -2264,11 +2287,14 @@ function App() {
         ballHistoryRef.current = [];
         motionHistoryRef.current = [];
         dinkHitBatchRef.current = [];
+        dinkReviewHistoryRef.current = [];
         lastDinkHitAtRef.current = 0;
         pendingDinkContactRef.current = null;
+        lastVoiceReviewRef.current = null;
         setMotionHistory([]);
         setDinkHitBatch([]);
         setLatestDinkReview(null);
+        setDinkReviewHistory([]);
         latestBallRef.current = null;
         latestPaddleRef.current = null;
         latestPaddleSearchAreaRef.current = null;
@@ -2471,7 +2497,8 @@ function App() {
               <h2 id="dink-review-heading">Four-Hit Dink Review</h2>
               <p>
                 Live tracking continues throughout the rally. DinkAI delivers
-                one coaching review after four likely paddle-and-ball contacts.
+                a review after every four likely contacts and keeps a running
+                session summary across every completed batch.
               </p>
             </div>
             <button type="button" className="secondaryButton" onClick={resetDinkReview}>
@@ -2496,7 +2523,7 @@ function App() {
             {latestDinkReview ? (
               <div className="dinkReviewResult" aria-live="polite">
                 <div className="reviewScore">
-                  <span className="scoreLabel">Last four-hit score</span>
+                  <span className="scoreLabel">Batch {latestDinkReview.batchNumber} score</span>
                   <strong>{latestDinkReview.score}</strong>
                   <span className="scoreMax">/ 100</span>
                 </div>
@@ -2516,6 +2543,10 @@ function App() {
                       ? '-'
                       : `${Math.round((1 - Math.min(1, latestDinkReview.velocityVariation)) * 100)}%`}
                   </span>
+                  <span>
+                    Session through {sessionDinkReview.hitCount} hits: {sessionDinkReview.averageScore} / 100
+                  </span>
+                  <span>Session trend: {sessionDinkReview.scoreTrend}</span>
                 </div>
                 <div className="reviewTips">
                   <h3>How to improve the next four</h3>
@@ -2645,7 +2676,7 @@ function App() {
             <div>
               <h2 id="voice-heading">Voice Reviews</h2>
               <p>
-                DinkAI speaks each completed {HITS_PER_DINK_REVIEW}-hit dink review.
+                DinkAI speaks each completed {HITS_PER_DINK_REVIEW}-hit review with a running session summary.
               </p>
             </div>
             <span className={voiceReviewsEnabled ? 'actionBadge actionBadgeActive' : 'actionBadge'}>
@@ -2655,9 +2686,13 @@ function App() {
 
           <div className="voiceReviewContent">
             <div className="voiceReviewCount">
-              <span>Last review score</span>
-              <strong>{latestDinkReview?.score ?? '--'}</strong>
-              <small>Next review: {dinkHitBatch.length} / {HITS_PER_DINK_REVIEW} hits</small>
+              <span>Session score</span>
+              <strong>{sessionDinkReview?.averageScore ?? '--'}</strong>
+              <small>
+                {sessionDinkReview
+                  ? `${sessionDinkReview.hitCount} hits reviewed · ${sessionDinkReview.scoreTrend}`
+                  : `Next review: ${dinkHitBatch.length} / ${HITS_PER_DINK_REVIEW} hits`}
+              </small>
             </div>
             <p className="voiceReviewStatus" aria-live="polite">{voiceStatus}</p>
             <div className="voiceReviewActions">

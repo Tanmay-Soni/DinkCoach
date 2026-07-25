@@ -95,6 +95,6 @@ This project is released under the [MIT License](LICENSE).
 
 ## Voice reviews
 
-DinkAI speaks the completed four-hit review through the browser’s built-in text-to-speech voice. For an ElevenLabs voice, copy `.env.example` to `.env.local`, set `ELEVENLABS_API_KEY`, and optionally set `ELEVENLABS_VOICE_ID` or `ELEVENLABS_TTS_ENDPOINT`. The local Vite server keeps the key on the server and proxies audio to the browser.
+DinkAI speaks every completed four-hit review through the browser’s built-in text-to-speech voice: at 4, 8, 12, and each later completed batch. Each spoken review includes the latest four-hit feedback plus the accumulated session score and trend. For an ElevenLabs voice, copy `.env.example` to `.env.local`, set `ELEVENLABS_API_KEY`, and optionally set `ELEVENLABS_VOICE_ID` or `ELEVENLABS_TTS_ENDPOINT`. The local Vite server keeps the key on the server and proxies audio to the browser.
 
 For deployment, set `VITE_TTS_ENDPOINT` to a server-side endpoint that accepts `POST { "text": "..." }` and returns MP3 audio. That endpoint must hold the ElevenLabs key; do not expose it in a `VITE_` variable. Use **Test voice** once after opening the app so the browser permits audio playback.
