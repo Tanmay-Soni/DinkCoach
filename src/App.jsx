@@ -33,6 +33,10 @@ const LANDMARK_SMOOTHING_ALPHA = 0.22;
 const MOTION_HISTORY_SIZE = 60;
 const SWING_VELOCITY_THRESHOLD = 1.25;
 const SWING_HOLD_MS = 1000;
+const HIT_REARM_VELOCITY_THRESHOLD = SWING_VELOCITY_THRESHOLD * 0.55;
+const HIT_COUNT_COOLDOWN_MS = 750;
+const HITS_PER_REVIEW = 4;
+const VOICE_REVIEW_ENDPOINT = import.meta.env.VITE_TTS_ENDPOINT || '/api/voice-review';
 const BALL_DETECTION_MIN_SCORE = 0.25;
 const BALL_DETECTION_INTERVAL_MS = 120;
 const BALL_HISTORY_SIZE = 60;
@@ -1592,6 +1596,29 @@ function getReadyPositionAnalysis(landmarks, measurements) {
   };
 }
 
+function getSpokenReview(analysis, hitCount) {
+  if (analysis.score === null) {
+    return `That is ${hitCount} hits. Step back so I can see your full body before the next review.`;
+  }
+
+  const coachingTips = analysis.tips.slice(0, 2).join(' ');
+
+  return `That is ${hitCount} hits. Your ready position score is ${analysis.score} out of 100: ${analysis.status}. ${coachingTips}`;
+}
+
+function speakWithBrowserVoice(text) {
+  if (!('speechSynthesis' in window)) {
+    return false;
+  }
+
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1;
+  utterance.pitch = 1;
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
+
 function waitForVideoMetadata(video) {
   if (video.videoWidth && video.videoHeight) {
     return Promise.resolve();
@@ -1650,6 +1677,11 @@ function App() {
   const latestPaddleSearchAreaRef = useRef(null);
   const ballDetectionTimeoutRef = useRef(null);
   const isBallDetectionStoppedRef = useRef(false);
+  const hitArmedRef = useRef(true);
+  const lastHitAtRef = useRef(0);
+  const lastVoiceReviewHitCountRef = useRef(0);
+  const voiceAudioRef = useRef(null);
+  const voiceAudioUrlRef = useRef(null);
   const [status, setStatus] = useState('Loading pose model...');
   const [error, setError] = useState('');
   const [latestLandmarks, setLatestLandmarks] = useState([]);
@@ -1668,6 +1700,9 @@ function App() {
   const [calibrationTarget, setCalibrationTarget] = useState('ball');
   const [paddleHoldingArm, setPaddleHoldingArm] = useState('right');
   const [sampleBox, setSampleBox] = useState(INITIAL_SAMPLE_BOX);
+  const [hitCount, setHitCount] = useState(0);
+  const [voiceReviewsEnabled, setVoiceReviewsEnabled] = useState(true);
+  const [voiceStatus, setVoiceStatus] = useState('Voice reviews ready');
   colorProfileRef.current = colorProfile;
   paddleColorProfileRef.current = paddleColorProfile;
   const postureMeasurements = useMemo(
@@ -1701,6 +1736,78 @@ function App() {
   const activeCalibrationProfile =
     calibrationTarget === 'paddle' ? paddleColorProfile : colorProfile;
   const activeCalibrationLabel = calibrationTarget === 'paddle' ? 'Paddle' : 'Ball';
+
+  const playVoiceReview = useCallback(async (text) => {
+    voiceAudioRef.current?.pause();
+    if (voiceAudioUrlRef.current) {
+      URL.revokeObjectURL(voiceAudioUrlRef.current);
+      voiceAudioUrlRef.current = null;
+    }
+
+    try {
+      const response = await fetch(VOICE_REVIEW_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Voice API returned ${response.status}`);
+      }
+
+      const audioUrl = URL.createObjectURL(await response.blob());
+      const audio = new Audio(audioUrl);
+      voiceAudioRef.current = audio;
+      voiceAudioUrlRef.current = audioUrl;
+      audio.onended = () => {
+        if (voiceAudioUrlRef.current === audioUrl) {
+          URL.revokeObjectURL(audioUrl);
+          voiceAudioUrlRef.current = null;
+        }
+      };
+      await audio.play();
+      setVoiceStatus('ElevenLabs voice played');
+    } catch (voiceError) {
+      console.warn('Voice API unavailable; using the browser voice.', voiceError);
+      const usedBrowserVoice = speakWithBrowserVoice(text);
+      setVoiceStatus(
+        usedBrowserVoice
+          ? 'Browser voice played (add ElevenLabs credentials for a natural voice)'
+          : 'Voice playback is not supported in this browser',
+      );
+    }
+  }, []);
+
+  const handleVoiceToggle = useCallback(() => {
+    setVoiceReviewsEnabled((enabled) => {
+      const nextEnabled = !enabled;
+      if (!nextEnabled) {
+        voiceAudioRef.current?.pause();
+        window.speechSynthesis?.cancel();
+        setVoiceStatus('Voice reviews paused');
+      } else {
+        setVoiceStatus('Voice reviews enabled');
+      }
+      return nextEnabled;
+    });
+  }, []);
+
+  const handleVoiceTest = useCallback(() => {
+    playVoiceReview(getSpokenReview(readyPositionAnalysis, hitCount || HITS_PER_REVIEW));
+  }, [hitCount, playVoiceReview, readyPositionAnalysis]);
+
+  useEffect(() => {
+    if (
+      hitCount > 0 &&
+      hitCount % HITS_PER_REVIEW === 0 &&
+      lastVoiceReviewHitCountRef.current !== hitCount
+    ) {
+      lastVoiceReviewHitCountRef.current = hitCount;
+      if (voiceReviewsEnabled) {
+        playVoiceReview(getSpokenReview(readyPositionAnalysis, hitCount));
+      }
+    }
+  }, [hitCount, playVoiceReview, readyPositionAnalysis, voiceReviewsEnabled]);
 
   const samplePixelAtPoint = useCallback((point, profile = colorProfile) => {
     const video = videoRef.current;
@@ -2080,6 +2187,7 @@ function App() {
 
           if (!hasVisibleArm) {
             setHeldSwing(null);
+            hitArmedRef.current = true;
           } else if (peakWristVelocity >= SWING_VELOCITY_THRESHOLD) {
             setHeldSwing({
               dominantSide:
@@ -2087,7 +2195,18 @@ function App() {
               peakVelocity: peakWristVelocity,
               expiresAt: nowInMs + SWING_HOLD_MS,
             });
+            if (
+              hitArmedRef.current &&
+              nowInMs - lastHitAtRef.current >= HIT_COUNT_COOLDOWN_MS
+            ) {
+              hitArmedRef.current = false;
+              lastHitAtRef.current = nowInMs;
+              setHitCount((currentHitCount) => currentHitCount + 1);
+            }
           } else {
+            if (peakWristVelocity < HIT_REARM_VELOCITY_THRESHOLD) {
+              hitArmedRef.current = true;
+            }
             setHeldSwing((currentSwing) =>
               currentSwing && currentSwing.expiresAt > nowInMs
                 ? currentSwing
@@ -2228,6 +2347,11 @@ function App() {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       landmarkerRef.current?.close();
       ballDetectorRef.current?.dispose();
+      voiceAudioRef.current?.pause();
+      window.speechSynthesis?.cancel();
+      if (voiceAudioUrlRef.current) {
+        URL.revokeObjectURL(voiceAudioUrlRef.current);
+      }
     };
   }, [predictWebcam, runBallDetection]);
 
@@ -2420,6 +2544,37 @@ function App() {
               <strong>{formatVelocity(actionDetection.peakWristVelocity)}</strong>
             </div>
             <p className="actionMessage">{actionDetection.message}</p>
+          </div>
+        </section>
+
+        <section className="voicePanel" aria-labelledby="voice-heading">
+          <div className="actionHeader">
+            <div>
+              <h2 id="voice-heading">Voice Reviews</h2>
+              <p>
+                DinkAI gives a ready-position review after every {HITS_PER_REVIEW} estimated hits.
+              </p>
+            </div>
+            <span className={voiceReviewsEnabled ? 'actionBadge actionBadgeActive' : 'actionBadge'}>
+              Voice: {voiceReviewsEnabled ? 'on' : 'off'}
+            </span>
+          </div>
+
+          <div className="voiceReviewContent">
+            <div className="voiceReviewCount">
+              <span>Estimated hits</span>
+              <strong>{hitCount}</strong>
+              <small>Next review in {HITS_PER_REVIEW - (hitCount % HITS_PER_REVIEW)} hits</small>
+            </div>
+            <p className="voiceReviewStatus" aria-live="polite">{voiceStatus}</p>
+            <div className="voiceReviewActions">
+              <button type="button" onClick={handleVoiceToggle}>
+                {voiceReviewsEnabled ? 'Pause voice reviews' : 'Enable voice reviews'}
+              </button>
+              <button type="button" className="secondaryButton" onClick={handleVoiceTest}>
+                Test voice
+              </button>
+            </div>
           </div>
         </section>
 
