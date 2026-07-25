@@ -23,6 +23,8 @@ import {
 } from './lib/dinkReview.js';
 import { createPoseHitRecorder, buildSessionComposite } from './lib/avatar/index.js';
 import AverageDinkAvatarPanel from './components/AverageDinkAvatarPanel.jsx';
+import { createFatigueSample, analyzeFatigueSession } from './lib/fatigue.js';
+import SessionSummary from './components/SessionSummary.jsx';
 
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const MODEL_URL =
@@ -1673,6 +1675,9 @@ function CoachApp() {
   if (poseHitRecorderRef.current === null) {
     poseHitRecorderRef.current = createPoseHitRecorder();
   }
+  const fatigueSamplesRef = useRef([]);
+  const sessionStartRef = useRef(null);
+  const sessionEndRef = useRef(null);
   const [status, setStatus] = useState('Loading pose model...');
   const [error, setError] = useState('');
   const [latestLandmarks, setLatestLandmarks] = useState([]);
@@ -1683,6 +1688,8 @@ function CoachApp() {
   const [latestDinkReview, setLatestDinkReview] = useState(null);
   const [dinkReviewHistory, setDinkReviewHistory] = useState([]);
   const [avatarRepVersion, setAvatarRepVersion] = useState(0);
+  const [fatigueSamples, setFatigueSamples] = useState([]);
+  const [sessionPhase, setSessionPhase] = useState('live');
   const [ballDebug, setBallDebug] = useState(INITIAL_BALL_DEBUG);
   const [paddleDebug, setPaddleDebug] = useState(INITIAL_PADDLE_DEBUG);
   const [pixelSample, setPixelSample] = useState(INITIAL_PIXEL_SAMPLE);
@@ -1738,6 +1745,10 @@ function CoachApp() {
         swingSide: paddleHoldingArm,
       }),
     [avatarRepVersion, paddleHoldingArm],
+  );
+  const fatigueAnalysis = useMemo(
+    () => analyzeFatigueSession(fatigueSamples),
+    [fatigueSamples],
   );
 
   useEffect(() => {
@@ -1824,10 +1835,12 @@ function CoachApp() {
     pendingDinkContactRef.current = null;
     lastVoiceReviewRef.current = null;
     poseHitRecorderRef.current.reset();
+    fatigueSamplesRef.current = [];
     setDinkHitBatch([]);
     setLatestDinkReview(null);
     setDinkReviewHistory([]);
     setAvatarRepVersion((version) => version + 1);
+    setFatigueSamples([]);
   }, []);
 
   const recordDinkHit = useCallback((candidate, landmarks) => {
@@ -1839,6 +1852,15 @@ function CoachApp() {
       readyScore: readyPosition.score,
       wristHeightStatus: measurements.wristHeightStatus,
     };
+    const fatigueSample = createFatigueSample({
+      hitIndex: fatigueSamplesRef.current.length,
+      timestamp: candidate.timestamp,
+      measurements,
+      readyScore: readyPosition.score,
+    });
+    const nextFatigueSamples = [...fatigueSamplesRef.current, fatigueSample];
+    fatigueSamplesRef.current = nextFatigueSamples;
+    setFatigueSamples(nextFatigueSamples);
     const nextBatch = [...dinkHitBatchRef.current, nextHit];
 
     lastDinkHitAtRef.current = candidate.timestamp;
@@ -2303,6 +2325,10 @@ function CoachApp() {
   }, [drawPose, recordDinkHit]);
 
   useEffect(() => {
+    if (sessionPhase !== 'live') {
+      return undefined;
+    }
+
     let isMounted = true;
 
     async function startPoseTracking() {
@@ -2315,11 +2341,16 @@ function CoachApp() {
         lastDinkHitAtRef.current = 0;
         pendingDinkContactRef.current = null;
         poseHitRecorderRef.current.reset();
+        fatigueSamplesRef.current = [];
         lastVoiceReviewRef.current = null;
+        sessionStartRef.current = performance.now();
+        sessionEndRef.current = null;
+        setError('');
         setMotionHistory([]);
         setDinkHitBatch([]);
         setLatestDinkReview(null);
         setDinkReviewHistory([]);
+        setFatigueSamples([]);
         latestBallRef.current = null;
         latestPaddleRef.current = null;
         latestPaddleSearchAreaRef.current = null;
@@ -2428,16 +2459,51 @@ function CoachApp() {
         URL.revokeObjectURL(voiceAudioUrlRef.current);
       }
     };
-  }, [predictWebcam, runBallDetection, runColorBallTracking]);
+  }, [predictWebcam, runBallDetection, runColorBallTracking, sessionPhase]);
+
+  const handleEndSession = useCallback(() => {
+    sessionEndRef.current = performance.now();
+    setSessionPhase('summary');
+  }, []);
+
+  const handleStartNewSession = useCallback(() => {
+    setSessionPhase('live');
+  }, []);
+
+  if (sessionPhase === 'summary') {
+    const sessionDurationMinutes =
+      sessionStartRef.current !== null && sessionEndRef.current !== null
+        ? (sessionEndRef.current - sessionStartRef.current) / 60000
+        : null;
+
+    return (
+      <main className="app">
+        <SessionSummary
+          sessionDinkReview={sessionDinkReview}
+          dinkReviewHistory={dinkReviewHistory}
+          sessionComposite={sessionComposite}
+          fatigueAnalysis={fatigueAnalysis}
+          totalHitsRecorded={fatigueSamples.length}
+          sessionDurationMinutes={sessionDurationMinutes}
+          onStartNewSession={handleStartNewSession}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="app">
       <section className="stage" aria-label="DinkAI pose tracking preview">
         <div className="stageHeader">
           <h1>DinkAI</h1>
-          <span className={error ? 'status statusError' : 'status'}>
-            {error || status}
-          </span>
+          <div className="stageHeaderActions">
+            <span className={error ? 'status statusError' : 'status'}>
+              {error || status}
+            </span>
+            <button type="button" className="primaryButton" onClick={handleEndSession}>
+              End session
+            </button>
+          </div>
         </div>
 
         <div
@@ -2591,8 +2657,6 @@ function CoachApp() {
             )}
           </div>
         </section>
-
-        <AverageDinkAvatarPanel composite={sessionComposite} />
 
         <section className="coachPanel" aria-labelledby="coach-heading">
           <div className="coachHeader">

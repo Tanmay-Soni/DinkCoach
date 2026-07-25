@@ -10,6 +10,7 @@ DinkAI is a browser-based pickleball dink coaching prototype. It continuously tr
 - Counts a likely dink contact when a fresh ball approaches the calibrated paddle and then reverses away from it.
 - Batches four likely contacts into one player-facing review of ready position, contact spacing, and swing consistency.
 - Synthesizes a post-session "average dink" avatar: a median-composite skeleton of the player's own dink across the session, rendered as a volumetric body with recurring faults highlighted (see [Average dink avatar](#average-dink-avatar)).
+- Tracks a session-long **Fatigue Score**: compares early-session vs. late-session form hit by hit and flags drift such as "you're standing taller as you tire" (see [Fatigue Score](#fatigue-score)).
 - Scores a ready position from visible shoulders, hips, knees, ankles, and wrists.
 - Shows posture, motion, action, and landmark-debug data.
 - Detects a possible paddle near the selected wrist using a calibrated color profile.
@@ -66,6 +67,19 @@ How it works:
 
 Full design notes and tuning parameters are in [docs/AVERAGE_DINK_AVATAR.md](docs/AVERAGE_DINK_AVATAR.md). The pipeline is pure and unit-tested (`test/avatarComposite.test.js`).
 
+## Fatigue Score
+
+The summary also shows a **Fatigue Score** (0–100, 100 = form held steady all session), next to the four-hit review and the average-dink avatar. Where the four-hit review scores one batch at a time and forgets it, the Fatigue Score keeps a sample from every hit for the whole session and compares early-session form against late-session form — the rep-over-rep trend a coach notices, like a player standing up more as their legs tire.
+
+How it works:
+
+1. Every dink hit already produces posture measurements for the four-hit review (`getPostureMeasurements` in `App.jsx`); the fatigue module reuses those instead of re-deriving posture, keeping one sample per hit for the session (`src/lib/fatigue.js`).
+2. Four tracked metrics (knee bend angle, ready-position score, stance width, torso lean) are compared between the first third and last third of the session's hits, once enough hits exist.
+3. Only the direction that reads as fatigue counts against the score — e.g. knees straightening lowers the score, knees bending more does not raise it. Each flagged metric contributes a plain-language insight ("Your knees straightened by about 9° over the session... reset into a lower ready position between points.").
+4. The panel (`FatigueDriftPanel.jsx`) shows the score, a status badge, a small early-vs-late sparkline per metric, and the insight list — staying silent when nothing drifted.
+
+Full design notes and tuning parameters are in [docs/FATIGUE_SCORE.md](docs/FATIGUE_SCORE.md). The pipeline is pure and unit-tested (`test/fatigue.test.js`).
+
 ## Architecture
 
 The application is deliberately client-only:
@@ -79,7 +93,8 @@ Webcam → MediaPipe Pose Landmarker → normalized landmarks → coaching/motio
 - `src/lib/geometry.js` contains reusable, tested validation and measurement primitives for normalized landmarks.
 - `src/lib/dinkReview.js` defines conservative contact qualification and four-hit review aggregation.
 - `src/lib/avatar/` builds the post-session composite avatar from recorded reps (recorder, normalization, median averaging, fault aggregation).
-- `src/components/` holds the composite avatar renderer and its React player/panel.
+- `src/lib/fatigue.js` compares early-session vs. late-session hit measurements into the Fatigue Score and its coaching insights.
+- `src/components/` holds the composite avatar renderer/player/panel and the Fatigue Score panel.
 - `test/` contains Node’s built-in test runner tests; it does not require a browser or webcam.
 - `docs/ARCHITECTURE.md` records runtime boundaries and the intended extraction path.
 
