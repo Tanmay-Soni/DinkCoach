@@ -877,3 +877,157 @@ td {
     padding: 10px 12px;
   }
 }
+
+/* ---- Average Dink avatar (post-session summary) ---- */
+.avgDinkPanel {
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid #99d9d3;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.08);
+}
+
+.avgDinkHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #cfe9e6;
+  background: #effaf8;
+}
+
+.avgDinkHeader h2 {
+  margin: 0;
+}
+
+.avgDinkHeader p {
+  margin: 8px 0 0;
+  color: #475467;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  max-width: 60ch;
+}
+
+.avgDinkBadge {
+  flex: none;
+  align-self: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.avgDinkContent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 0.5fr);
+  gap: 18px;
+  padding: 20px;
+}
+
+.avgDinkStage {
+  position: relative;
+  aspect-ratio: 16 / 11;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #123;
+  background: linear-gradient(180deg, #0e1e26, #0a151b);
+}
+
+.avgDinkStageLabel {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(0, 245, 212, 0.7);
+  pointer-events: none;
+}
+
+.avgDinkSide {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.avgDinkSide h3 {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #475467;
+}
+
+.avgDinkControls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avgDinkToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #344054;
+  cursor: pointer;
+}
+
+.avgDinkFaults {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.avgDinkFaults li {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.avgDinkSwatch {
+  grid-row: span 2;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  align-self: center;
+}
+
+.avgDinkFaultName {
+  font-weight: 700;
+  color: #1d2939;
+}
+
+.avgDinkFaultPct {
+  grid-column: 2;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: #667085;
+}
+
+.avgDinkClean,
+.avgDinkEmpty {
+  color: #475467;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.avgDinkEmpty {
+  padding: 20px;
+}
+
+@media (max-width: 720px) {
+  .avgDinkContent {
+    grid-template-columns: 1fr;
+  }
+}

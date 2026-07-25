@@ -21,6 +21,8 @@ import {
   createSessionDinkReview,
   getDinkContactUpdate,
 } from './lib/dinkReview.js';
+import { createPoseHitRecorder, buildSessionComposite } from './lib/avatar/index.js';
+import AverageDinkAvatarPanel from './components/AverageDinkAvatarPanel.jsx';
 
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const MODEL_URL =
@@ -1667,6 +1669,10 @@ function App() {
   const lastVoiceReviewRef = useRef(null);
   const voiceAudioRef = useRef(null);
   const voiceAudioUrlRef = useRef(null);
+  const poseHitRecorderRef = useRef(null);
+  if (poseHitRecorderRef.current === null) {
+    poseHitRecorderRef.current = createPoseHitRecorder();
+  }
   const [status, setStatus] = useState('Loading pose model...');
   const [error, setError] = useState('');
   const [latestLandmarks, setLatestLandmarks] = useState([]);
@@ -1676,6 +1682,7 @@ function App() {
   const [dinkHitBatch, setDinkHitBatch] = useState([]);
   const [latestDinkReview, setLatestDinkReview] = useState(null);
   const [dinkReviewHistory, setDinkReviewHistory] = useState([]);
+  const [avatarRepVersion, setAvatarRepVersion] = useState(0);
   const [ballDebug, setBallDebug] = useState(INITIAL_BALL_DEBUG);
   const [paddleDebug, setPaddleDebug] = useState(INITIAL_PADDLE_DEBUG);
   const [pixelSample, setPixelSample] = useState(INITIAL_PIXEL_SAMPLE);
@@ -1725,6 +1732,21 @@ function App() {
     () => createSessionDinkReview(dinkReviewHistory),
     [dinkReviewHistory],
   );
+  const sessionComposite = useMemo(
+    // avatarRepVersion bumps whenever the recorder finalizes a rep window, so the
+    // composite rebuilds as clean dink contacts accumulate across the session.
+    () =>
+      buildSessionComposite(poseHitRecorderRef.current.getReps(), {
+        swingSide: paddleHoldingArm,
+      }),
+    [avatarRepVersion, paddleHoldingArm],
+  );
+
+  useEffect(() => {
+    const recorder = poseHitRecorderRef.current;
+    recorder.setOnReps(() => setAvatarRepVersion((version) => version + 1));
+    return () => recorder.setOnReps(null);
+  }, []);
   const activeCalibrationProfile =
     calibrationTarget === 'paddle' ? paddleColorProfile : colorProfile;
   const activeCalibrationLabel = calibrationTarget === 'paddle' ? 'Paddle' : 'Ball';
@@ -1803,12 +1825,16 @@ function App() {
     lastDinkHitAtRef.current = 0;
     pendingDinkContactRef.current = null;
     lastVoiceReviewRef.current = null;
+    poseHitRecorderRef.current.reset();
     setDinkHitBatch([]);
     setLatestDinkReview(null);
     setDinkReviewHistory([]);
+    setAvatarRepVersion((version) => version + 1);
   }, []);
 
   const recordDinkHit = useCallback((candidate, landmarks) => {
+    // Capture a pose window around this contact for the average-dink avatar.
+    poseHitRecorderRef.current.registerHit(candidate.timestamp);
     const measurements = getPostureMeasurements(landmarks);
     const readyPosition = getReadyPositionAnalysis(landmarks, measurements);
     const nextHit = {
@@ -2177,6 +2203,9 @@ function App() {
         const detectedLandmarks = results.landmarks?.[0] ?? [];
 
         setLatestLandmarks(detectedLandmarks);
+        // Buffer raw pose frames so a window around each dink contact can be
+        // sliced out for the post-session "average dink" avatar.
+        poseHitRecorderRef.current.pushFrame({ t: nowInMs, kp: detectedLandmarks });
         const paddleResult = getTrackedPaddle(
           video,
           paddleTrackerCanvasRef.current,
@@ -2290,6 +2319,7 @@ function App() {
         dinkReviewHistoryRef.current = [];
         lastDinkHitAtRef.current = 0;
         pendingDinkContactRef.current = null;
+        poseHitRecorderRef.current.reset();
         lastVoiceReviewRef.current = null;
         setMotionHistory([]);
         setDinkHitBatch([]);
@@ -2566,6 +2596,8 @@ function App() {
             )}
           </div>
         </section>
+
+        <AverageDinkAvatarPanel composite={sessionComposite} />
 
         <section className="coachPanel" aria-labelledby="coach-heading">
           <div className="coachHeader">
