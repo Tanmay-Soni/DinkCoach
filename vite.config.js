@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 function voiceReviewApi() {
   return {
@@ -22,7 +23,8 @@ function createVoiceReviewHandler() {
     }
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+    // Jade is an upbeat, natural voice that suits short coaching feedback.
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || 'g7LVvkPWALzPxOQbF6OE';
     const elevenLabsEndpoint =
       process.env.ELEVENLABS_TTS_ENDPOINT ||
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
@@ -104,6 +106,6 @@ export default defineConfig(({ mode }) => {
   Object.assign(process.env, environment);
 
   return {
-    plugins: [react(), voiceReviewApi()],
+    plugins: [react(), tailwindcss(), voiceReviewApi()],
   };
 });
