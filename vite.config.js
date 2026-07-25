@@ -23,8 +23,8 @@ function createVoiceReviewHandler() {
     }
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    // Adam is a warm, conversational voice that suits short coaching feedback.
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB';
+    // Jade is an upbeat, natural voice that suits short coaching feedback.
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || 'g7LVvkPWALzPxOQbF6OE';
     const elevenLabsEndpoint =
       process.env.ELEVENLABS_TTS_ENDPOINT ||
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;

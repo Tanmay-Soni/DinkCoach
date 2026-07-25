@@ -1,4 +1,4 @@
-const DEFAULT_VOICE_ID = 'pNInz6obpgDQGcFmaJgB';
+const DEFAULT_VOICE_ID = 'g7LVvkPWALzPxOQbF6OE';
 
 export default async function voiceReview(request, response) {
   if (request.method !== 'POST') {
