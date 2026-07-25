@@ -22,7 +22,8 @@ import {
   getDinkContactUpdate,
 } from './lib/dinkReview.js';
 import { createPoseHitRecorder, buildSessionComposite } from './lib/avatar/index.js';
-import AverageDinkAvatarPanel from './components/AverageDinkAvatarPanel.jsx';
+import { createFatigueSample, analyzeFatigueSession } from './lib/fatigue.js';
+import SessionSummary from './components/SessionSummary.jsx';
 
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const MODEL_URL =
@@ -1673,6 +1674,10 @@ function App() {
   if (poseHitRecorderRef.current === null) {
     poseHitRecorderRef.current = createPoseHitRecorder();
   }
+  const fatigueSamplesRef = useRef([]);
+  const trackingGenerationRef = useRef(0);
+  const sessionStartRef = useRef(null);
+  const sessionEndRef = useRef(null);
   const [status, setStatus] = useState('Loading pose model...');
   const [error, setError] = useState('');
   const [latestLandmarks, setLatestLandmarks] = useState([]);
@@ -1683,6 +1688,8 @@ function App() {
   const [latestDinkReview, setLatestDinkReview] = useState(null);
   const [dinkReviewHistory, setDinkReviewHistory] = useState([]);
   const [avatarRepVersion, setAvatarRepVersion] = useState(0);
+  const [fatigueSamples, setFatigueSamples] = useState([]);
+  const [sessionPhase, setSessionPhase] = useState('live'); // 'live' | 'summary'
   const [ballDebug, setBallDebug] = useState(INITIAL_BALL_DEBUG);
   const [paddleDebug, setPaddleDebug] = useState(INITIAL_PADDLE_DEBUG);
   const [pixelSample, setPixelSample] = useState(INITIAL_PIXEL_SAMPLE);
@@ -1747,6 +1754,10 @@ function App() {
     recorder.setOnReps(() => setAvatarRepVersion((version) => version + 1));
     return () => recorder.setOnReps(null);
   }, []);
+  const fatigueAnalysis = useMemo(
+    () => analyzeFatigueSession(fatigueSamples),
+    [fatigueSamples],
+  );
   const activeCalibrationProfile =
     calibrationTarget === 'paddle' ? paddleColorProfile : colorProfile;
   const activeCalibrationLabel = calibrationTarget === 'paddle' ? 'Paddle' : 'Ball';
@@ -1826,10 +1837,12 @@ function App() {
     pendingDinkContactRef.current = null;
     lastVoiceReviewRef.current = null;
     poseHitRecorderRef.current.reset();
+    fatigueSamplesRef.current = [];
     setDinkHitBatch([]);
     setLatestDinkReview(null);
     setDinkReviewHistory([]);
     setAvatarRepVersion((version) => version + 1);
+    setFatigueSamples([]);
   }, []);
 
   const recordDinkHit = useCallback((candidate, landmarks) => {
@@ -1842,6 +1855,16 @@ function App() {
       readyScore: readyPosition.score,
       wristHeightStatus: measurements.wristHeightStatus,
     };
+    // Every hit (not just every fourth) feeds the session-long fatigue trend.
+    const fatigueSample = createFatigueSample({
+      hitIndex: fatigueSamplesRef.current.length,
+      timestamp: candidate.timestamp,
+      measurements,
+      readyScore: readyPosition.score,
+    });
+    const nextFatigueSamples = [...fatigueSamplesRef.current, fatigueSample];
+    fatigueSamplesRef.current = nextFatigueSamples;
+    setFatigueSamples(nextFatigueSamples);
     const nextBatch = [...dinkHitBatchRef.current, nextHit];
 
     lastDinkHitAtRef.current = candidate.timestamp;
@@ -2307,100 +2330,150 @@ function App() {
     animationFrameRef.current = window.requestAnimationFrame(predictWebcam);
   }, [drawPose, recordDinkHit]);
 
-  useEffect(() => {
-    let isMounted = true;
+  // Tears down the camera/model pipeline in place (does not touch session
+  // stats) so "End session" can freeze tracking while the summary still reads
+  // dinkReviewHistory / sessionComposite / fatigueSamples. Also used for the
+  // final unmount cleanup. Incrementing the generation counter invalidates any
+  // startSession() call already in flight, so a stale async step (camera
+  // permission prompt, model download) cannot resurrect tracking after stop.
+  const stopTracking = useCallback(() => {
+    trackingGenerationRef.current += 1;
+    if (animationFrameRef.current) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    isBallDetectionStoppedRef.current = true;
+    if (ballDetectionTimeoutRef.current) {
+      window.clearTimeout(ballDetectionTimeoutRef.current);
+      ballDetectionTimeoutRef.current = null;
+    }
+    if (colorBallTrackingTimeoutRef.current) {
+      window.clearTimeout(colorBallTrackingTimeoutRef.current);
+      colorBallTrackingTimeoutRef.current = null;
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    landmarkerRef.current?.close();
+    landmarkerRef.current = null;
+    ballDetectorRef.current?.dispose();
+    ballDetectorRef.current = null;
+    voiceAudioRef.current?.pause();
+    window.speechSynthesis?.cancel();
+    if (voiceAudioUrlRef.current) {
+      URL.revokeObjectURL(voiceAudioUrlRef.current);
+      voiceAudioUrlRef.current = null;
+    }
+  }, []);
 
-    async function startPoseTracking() {
-      try {
-        isBallDetectionStoppedRef.current = false;
-        ballHistoryRef.current = [];
-        motionHistoryRef.current = [];
-        dinkHitBatchRef.current = [];
-        dinkReviewHistoryRef.current = [];
-        lastDinkHitAtRef.current = 0;
-        pendingDinkContactRef.current = null;
-        poseHitRecorderRef.current.reset();
-        lastVoiceReviewRef.current = null;
-        setMotionHistory([]);
-        setDinkHitBatch([]);
-        setLatestDinkReview(null);
-        setDinkReviewHistory([]);
-        latestBallRef.current = null;
-        latestPaddleRef.current = null;
-        latestPaddleSearchAreaRef.current = null;
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
+  // Resets every session-scoped ref/state and (re)acquires the camera + models.
+  // Runs on mount and whenever sessionPhase re-enters 'live' (i.e. "Start new
+  // session"). Every awaited step re-checks isCurrent() so a superseded call
+  // (stopTracking fired, or startSession fired again) quietly gives up instead
+  // of racing the newer attempt.
+  const startSession = useCallback(async () => {
+    const myGeneration = (trackingGenerationRef.current += 1);
+    const isCurrent = () => trackingGenerationRef.current === myGeneration;
 
-        if (!video || !canvas) {
-          return;
-        }
+    try {
+      isBallDetectionStoppedRef.current = false;
+      ballHistoryRef.current = [];
+      motionHistoryRef.current = [];
+      dinkHitBatchRef.current = [];
+      dinkReviewHistoryRef.current = [];
+      lastDinkHitAtRef.current = 0;
+      pendingDinkContactRef.current = null;
+      poseHitRecorderRef.current.reset();
+      fatigueSamplesRef.current = [];
+      lastVoiceReviewRef.current = null;
+      sessionStartRef.current = performance.now();
+      sessionEndRef.current = null;
+      setError('');
+      setMotionHistory([]);
+      setDinkHitBatch([]);
+      setLatestDinkReview(null);
+      setDinkReviewHistory([]);
+      setFatigueSamples([]);
+      setAvatarRepVersion((version) => version + 1);
+      latestBallRef.current = null;
+      latestPaddleRef.current = null;
+      latestPaddleSearchAreaRef.current = null;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
 
-        setStatus('Requesting camera access...');
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'user',
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          audio: false,
+      if (!video || !canvas) {
+        return;
+      }
+
+      setStatus('Requesting camera access...');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+
+      if (!isCurrent()) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+      video.srcObject = stream;
+      await waitForVideoMetadata(video);
+      await video.play();
+
+      runColorBallTracking();
+      setBallDebug((currentDebug) => ({
+        ...currentDebug,
+        status: 'Loading ball detector...',
+      }));
+      tf.setBackend('webgl')
+        .catch(() => tf.setBackend('cpu'))
+        .then(() => tf.ready())
+        .then(() => cocoSsd.load({ base: 'lite_mobilenet_v2' }))
+        .then((detector) => {
+          if (!isCurrent()) {
+            detector.dispose();
+            return;
+          }
+
+          ballDetectorRef.current = detector;
+          setBallDebug((currentDebug) => ({
+            ...currentDebug,
+            status: 'Ready',
+            source: currentDebug.source ?? 'None',
+          }));
+          runBallDetection();
+        })
+        .catch((detectorError) => {
+          console.error(detectorError);
+          setBallDebug((currentDebug) => ({
+            ...currentDebug,
+            status: 'COCO unavailable; color tracker still active',
+          }));
         });
 
-        if (!isMounted) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
+      setStatus('Starting pose tracker...');
+      const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+      const poseLandmarker = await createPoseLandmarker(vision);
 
-        streamRef.current = stream;
-        video.srcObject = stream;
-        await waitForVideoMetadata(video);
-        await video.play();
+      if (!isCurrent()) {
+        poseLandmarker.close();
+        return;
+      }
 
-        runColorBallTracking();
-        setBallDebug((currentDebug) => ({
-          ...currentDebug,
-          status: 'Loading ball detector...',
-        }));
-        tf.setBackend('webgl')
-          .catch(() => tf.setBackend('cpu'))
-          .then(() => tf.ready())
-          .then(() => cocoSsd.load({ base: 'lite_mobilenet_v2' }))
-          .then((detector) => {
-            if (!isMounted) {
-              detector.dispose();
-              return;
-            }
-
-            ballDetectorRef.current = detector;
-            setBallDebug((currentDebug) => ({
-              ...currentDebug,
-              status: 'Ready',
-              source: currentDebug.source ?? 'None',
-            }));
-            runBallDetection();
-          })
-          .catch((detectorError) => {
-            console.error(detectorError);
-            setBallDebug((currentDebug) => ({
-              ...currentDebug,
-              status: 'COCO unavailable; color tracker still active',
-            }));
-          });
-
-        setStatus('Starting pose tracker...');
-        const vision = await FilesetResolver.forVisionTasks(WASM_URL);
-        const poseLandmarker = await createPoseLandmarker(vision);
-
-        if (!isMounted) {
-          poseLandmarker.close();
-          return;
-        }
-
-        landmarkerRef.current = poseLandmarker;
-        drawingUtilsRef.current = new DrawingUtils(canvas.getContext('2d'));
-        setStatus('Tracking pose');
-        animationFrameRef.current = window.requestAnimationFrame(predictWebcam);
-      } catch (err) {
-        console.error(err);
+      landmarkerRef.current = poseLandmarker;
+      drawingUtilsRef.current = new DrawingUtils(canvas.getContext('2d'));
+      setStatus('Tracking pose');
+      animationFrameRef.current = window.requestAnimationFrame(predictWebcam);
+    } catch (err) {
+      console.error(err);
+      if (isCurrent()) {
         setError(
           err instanceof Error
             ? err.message
@@ -2409,40 +2482,67 @@ function App() {
         setStatus('Setup failed');
       }
     }
-
-    startPoseTracking();
-
-    return () => {
-      isMounted = false;
-      if (animationFrameRef.current) {
-        window.cancelAnimationFrame(animationFrameRef.current);
-      }
-      isBallDetectionStoppedRef.current = true;
-      if (ballDetectionTimeoutRef.current) {
-        window.clearTimeout(ballDetectionTimeoutRef.current);
-      }
-      if (colorBallTrackingTimeoutRef.current) {
-        window.clearTimeout(colorBallTrackingTimeoutRef.current);
-      }
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      landmarkerRef.current?.close();
-      ballDetectorRef.current?.dispose();
-      voiceAudioRef.current?.pause();
-      window.speechSynthesis?.cancel();
-      if (voiceAudioUrlRef.current) {
-        URL.revokeObjectURL(voiceAudioUrlRef.current);
-      }
-    };
   }, [predictWebcam, runBallDetection, runColorBallTracking]);
+
+  // (Re)starts tracking whenever the live view becomes active: on first mount,
+  // and again whenever the player returns from the summary via "Start new
+  // session." Ending a session does not run through this effect at all -
+  // handleEndSession calls stopTracking() directly so the camera/models stop
+  // the instant the button is pressed, without waiting for a re-render.
+  useEffect(() => {
+    if (sessionPhase === 'live') {
+      startSession();
+    }
+  }, [sessionPhase, startSession]);
+
+  // True unmount-only cleanup (stopTracking has empty deps, so this effect's
+  // cleanup never fires except when App itself unmounts).
+  useEffect(() => stopTracking, [stopTracking]);
+
+  const handleEndSession = useCallback(() => {
+    sessionEndRef.current = performance.now();
+    stopTracking();
+    setSessionPhase('summary');
+  }, [stopTracking]);
+
+  const handleStartNewSession = useCallback(() => {
+    setSessionPhase('live');
+  }, []);
+
+  if (sessionPhase === 'summary') {
+    const sessionDurationMinutes =
+      sessionStartRef.current !== null && sessionEndRef.current !== null
+        ? (sessionEndRef.current - sessionStartRef.current) / 60000
+        : null;
+
+    return (
+      <main className="app">
+        <SessionSummary
+          sessionDinkReview={sessionDinkReview}
+          dinkReviewHistory={dinkReviewHistory}
+          sessionComposite={sessionComposite}
+          fatigueAnalysis={fatigueAnalysis}
+          totalHitsRecorded={fatigueSamples.length}
+          sessionDurationMinutes={sessionDurationMinutes}
+          onStartNewSession={handleStartNewSession}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="app">
       <section className="stage" aria-label="DinkAI pose tracking preview">
         <div className="stageHeader">
           <h1>DinkAI</h1>
-          <span className={error ? 'status statusError' : 'status'}>
-            {error || status}
-          </span>
+          <div className="stageHeaderActions">
+            <span className={error ? 'status statusError' : 'status'}>
+              {error || status}
+            </span>
+            <button type="button" className="primaryButton" onClick={handleEndSession}>
+              End session
+            </button>
+          </div>
         </div>
 
         <div
@@ -2597,7 +2697,9 @@ function App() {
           </div>
         </section>
 
-        <AverageDinkAvatarPanel composite={sessionComposite} />
+        {/* The average-dink avatar and Fatigue Score are session-long views;
+            they render on the Session Summary page after "End session"
+            instead of duplicating here during live tracking. */}
 
         <section className="coachPanel" aria-labelledby="coach-heading">
           <div className="coachHeader">

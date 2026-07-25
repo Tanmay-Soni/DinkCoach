@@ -1031,3 +1031,302 @@ td {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- Fatigue & Drift (post-session summary) ---- */
+.fatiguePanel {
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid #99d9d3;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.08);
+}
+
+.fatigueHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #cfe9e6;
+  background: #effaf8;
+}
+
+.fatigueHeader h2 {
+  margin: 0;
+}
+
+.fatigueHeader p {
+  margin: 8px 0 0;
+  color: #475467;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  max-width: 60ch;
+}
+
+.fatigueContent {
+  padding: 20px;
+  display: grid;
+  gap: 18px;
+}
+
+.fatigueScoreBlock {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 4px;
+}
+
+.fatigueScoreBlock strong {
+  color: #0f766e;
+  font-size: 3rem;
+  line-height: 0.95;
+  font-variant-numeric: tabular-nums;
+}
+
+.fatigueScoreHint {
+  color: #667085;
+  font-size: 0.82rem;
+}
+
+.fatigueInsights {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.fatigueInsights li {
+  padding: 12px 14px;
+  border: 1px solid #f3d0c0;
+  border-radius: 8px;
+  background: #fff6f0;
+  color: #7a3b1f;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.fatigueClean {
+  padding: 12px 14px;
+  border: 1px solid #cfe9e6;
+  border-radius: 8px;
+  background: #f8fffe;
+  color: #475467;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.fatigueEmpty {
+  padding: 20px;
+  color: #475467;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.fatigueMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.fatigueMetricCard {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.fatigueMetricLabel {
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #667085;
+  font-weight: 700;
+}
+
+.fatigueMetricValues {
+  display: flex;
+  justify-content: space-between;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: #344054;
+}
+
+/* ---- primary CTA + stage header actions (End session / Start new session) ---- */
+.stageHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.primaryButton {
+  min-height: 40px;
+  padding: 9px 18px;
+  border: 1px solid #0f766e;
+  border-radius: 8px;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.primaryButton:hover {
+  background: #0c5f58;
+  border-color: #0c5f58;
+}
+
+.primaryButton:focus-visible {
+  outline: 3px solid rgba(20, 125, 115, 0.35);
+  outline-offset: 2px;
+}
+
+/* ---- Session Summary page ---- */
+.summaryStage {
+  display: grid;
+  gap: 0;
+}
+
+.summaryEyebrow {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.summaryHero {
+  border: 1px solid #99d9d3;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.08);
+  padding: 22px 24px;
+  margin-top: 8px;
+}
+
+.summaryHeroHeader h2 {
+  margin: 6px 0 0;
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+  color: #17202e;
+}
+
+.summaryHeroHeader p {
+  margin: 8px 0 0;
+  color: #475467;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.summaryHeroContent {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.35fr) minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e6eaf0;
+}
+
+.summaryHeroScore strong {
+  font-size: 3.5rem;
+}
+
+.summaryStatGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+.summaryStat {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.summaryStat span {
+  font-size: 0.78rem;
+  color: #667085;
+}
+
+.summaryStat strong {
+  font-size: 1.15rem;
+  color: #17202e;
+  font-variant-numeric: tabular-nums;
+}
+
+.summaryEmpty {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e6eaf0;
+  color: #475467;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.summaryBatches {
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.08);
+  padding: 18px 20px;
+}
+
+.summaryBatches h2 {
+  margin: 0 0 14px;
+  font-size: 1.1rem;
+}
+
+.summaryBatchList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.summaryBatchList li {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.5fr) minmax(70px, 0.4fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 0.88rem;
+}
+
+.summaryBatchNumber {
+  font-weight: 700;
+  color: #17202e;
+}
+
+.summaryBatchScore {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.summaryBatchDetail {
+  color: #475467;
+}
+
+@media (max-width: 720px) {
+  .summaryHeroContent {
+    grid-template-columns: 1fr;
+  }
+
+  .summaryBatchList li {
+    grid-template-columns: 1fr 1fr;
+  }
+}
