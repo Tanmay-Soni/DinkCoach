@@ -22,7 +22,8 @@ function createVoiceReviewHandler() {
     }
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+    // Adam is a warm, conversational voice that suits short coaching feedback.
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB';
     const elevenLabsEndpoint =
       process.env.ELEVENLABS_TTS_ENDPOINT ||
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
