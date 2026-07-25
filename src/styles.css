@@ -166,6 +166,150 @@ canvas {
   box-shadow: 0 12px 32px rgba(16, 24, 40, 0.08);
 }
 
+.dinkReviewPanel {
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid #99d9d3;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.08);
+}
+
+.dinkReviewHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #cfe9e6;
+  background: #effaf8;
+}
+
+.dinkReviewHeader p {
+  margin: 8px 0 0;
+  color: #475467;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.secondaryButton {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid #98a2b3;
+  border-radius: 6px;
+  color: #344054;
+  background: #ffffff;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.secondaryButton:hover {
+  border-color: #0f766e;
+  color: #0f766e;
+}
+
+.secondaryButton:focus-visible {
+  outline: 3px solid rgba(20, 125, 115, 0.3);
+  outline-offset: 2px;
+}
+
+.dinkReviewContent {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.45fr) minmax(0, 1fr);
+  gap: 18px;
+  padding: 20px;
+}
+
+.hitProgress {
+  display: grid;
+  align-content: center;
+  gap: 9px;
+  min-height: 150px;
+  padding: 16px;
+  border: 1px solid #cfe9e6;
+  border-radius: 8px;
+  background: #f8fffe;
+}
+
+.hitProgress strong,
+.reviewScore strong {
+  color: #0f766e;
+  font-size: 2.5rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.hitDots {
+  display: flex;
+  gap: 8px;
+}
+
+.hitDot {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #98a2b3;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.hitDotActive {
+  border-color: #0f766e;
+  background: #0f766e;
+}
+
+.dinkReviewResult {
+  display: grid;
+  grid-template-columns: minmax(135px, 0.45fr) minmax(190px, 0.7fr) minmax(240px, 1.15fr);
+  gap: 14px;
+}
+
+.reviewScore,
+.reviewStats,
+.reviewTips,
+.dinkReviewEmpty {
+  min-height: 150px;
+  padding: 14px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.reviewScore {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+
+.reviewStats {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  color: #475467;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.reviewTips ul {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+.reviewTips li,
+.dinkReviewEmpty {
+  color: #475467;
+  font-size: 0.92rem;
+  line-height: 1.42;
+}
+
+.dinkReviewEmpty {
+  display: grid;
+  align-items: center;
+  margin: 0;
+}
+
 .metricsPanel {
   margin-top: 24px;
 }
@@ -680,6 +824,15 @@ td {
 
   .coachHeader {
     flex-direction: column;
+  }
+
+  .dinkReviewHeader {
+    flex-direction: column;
+  }
+
+  .dinkReviewContent,
+  .dinkReviewResult {
+    grid-template-columns: 1fr;
   }
 
   .coachContent {

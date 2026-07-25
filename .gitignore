@@ -1,5 +1,12 @@
 node_modules/
 dist/
+.cache/
+coverage/
+.vite/
 .DS_Store
 npm-debug.log*
+*.log
 *.local
+.env
+.env.*
+!.env.example

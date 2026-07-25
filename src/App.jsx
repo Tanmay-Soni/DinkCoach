@@ -6,6 +6,20 @@ import {
 } from '@mediapipe/tasks-vision';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import * as tf from '@tensorflow/tfjs';
+import {
+  areFrameLandmarksUsable,
+  areLandmarksUsable,
+  getAngle,
+  getDistance,
+  getMidpoint,
+  getTiltAngle,
+  isUsableLandmark,
+} from './lib/geometry.js';
+import {
+  HITS_PER_DINK_REVIEW,
+  createDinkReview,
+  getDinkContactUpdate,
+} from './lib/dinkReview.js';
 
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm';
 const MODEL_URL =
@@ -33,18 +47,19 @@ const LANDMARK_SMOOTHING_ALPHA = 0.22;
 const MOTION_HISTORY_SIZE = 60;
 const SWING_VELOCITY_THRESHOLD = 1.25;
 const SWING_HOLD_MS = 1000;
-const HIT_REARM_VELOCITY_THRESHOLD = SWING_VELOCITY_THRESHOLD * 0.55;
-const HIT_COUNT_COOLDOWN_MS = 750;
-const HITS_PER_REVIEW = 4;
 const VOICE_REVIEW_ENDPOINT = import.meta.env.VITE_TTS_ENDPOINT || '/api/voice-review';
 const BALL_DETECTION_MIN_SCORE = 0.25;
-const BALL_DETECTION_INTERVAL_MS = 120;
+const COCO_BALL_DETECTION_INTERVAL_MS = 500;
+const COLOR_TRACKER_INTERVAL_MS = 75;
+const BALL_TRACK_HOLD_MS = 450;
 const BALL_HISTORY_SIZE = 60;
 const BALL_STATIONARY_SPEED = 0.05;
 const BALL_TRAIL_HOLD_MS = 1200;
-const COLOR_TRACKER_WIDTH = 240;
-const COLOR_TRACKER_HEIGHT = 135;
-const COLOR_TRACKER_MIN_PIXELS = 8;
+const COLOR_TRACKER_WIDTH = 320;
+const COLOR_TRACKER_HEIGHT = 180;
+const COLOR_TRACKER_MIN_PIXELS = 3;
+const COLOR_TRACKER_MAX_AREA_RATIO = 0.02;
+const COLOR_TRACKER_MAX_DIMENSION_RATIO = 0.18;
 const PADDLE_TRACKER_WIDTH = 240;
 const PADDLE_TRACKER_HEIGHT = 135;
 const PADDLE_TRACKER_MIN_PIXELS = 12;
@@ -266,101 +281,12 @@ function smoothLandmarks(previousLandmarks, nextLandmarks) {
   });
 }
 
-function isUsableLandmark(point) {
-  return (
-    Boolean(point) &&
-    Number.isFinite(point.x) &&
-    Number.isFinite(point.y) &&
-    point.x >= 0 &&
-    point.x <= 1 &&
-    point.y >= 0 &&
-    point.y <= 1
-  );
-}
-
-function areLandmarksUsable(points) {
-  return points.every(isUsableLandmark);
-}
-
-function areFrameLandmarksUsable(landmarks, indexes) {
-  return indexes.every((index) => isUsableLandmark(landmarks[index]));
-}
-
 function addMotionFrame(history, landmarks, timestamp) {
   if (!landmarks.length) {
     return history;
   }
 
   return [...history, { landmarks, timestamp }].slice(-MOTION_HISTORY_SIZE);
-}
-
-function getDistance(pointA, pointB) {
-  if (!areLandmarksUsable([pointA, pointB])) {
-    return null;
-  }
-
-  return Math.hypot(pointA.x - pointB.x, pointA.y - pointB.y);
-}
-
-function getMidpoint(pointA, pointB) {
-  if (!areLandmarksUsable([pointA, pointB])) {
-    return null;
-  }
-
-  return {
-    x: (pointA.x + pointB.x) / 2,
-    y: (pointA.y + pointB.y) / 2,
-    z:
-      Number.isFinite(pointA.z) && Number.isFinite(pointB.z)
-        ? (pointA.z + pointB.z) / 2
-        : 0,
-  };
-}
-
-function getAngle(pointA, pointB, pointC) {
-  if (!areLandmarksUsable([pointA, pointB, pointC])) {
-    return null;
-  }
-
-  const vectorA = {
-    x: pointA.x - pointB.x,
-    y: pointA.y - pointB.y,
-  };
-  const vectorC = {
-    x: pointC.x - pointB.x,
-    y: pointC.y - pointB.y,
-  };
-  const magnitudeA = Math.hypot(vectorA.x, vectorA.y);
-  const magnitudeC = Math.hypot(vectorC.x, vectorC.y);
-
-  if (magnitudeA === 0 || magnitudeC === 0) {
-    return null;
-  }
-
-  const cosine =
-    (vectorA.x * vectorC.x + vectorA.y * vectorC.y) /
-    (magnitudeA * magnitudeC);
-  const clampedCosine = Math.max(-1, Math.min(1, cosine));
-
-  return (Math.acos(clampedCosine) * 180) / Math.PI;
-}
-
-function getTiltAngle(leftPoint, rightPoint) {
-  if (!areLandmarksUsable([leftPoint, rightPoint])) {
-    return null;
-  }
-
-  const deltaX = rightPoint.x - leftPoint.x;
-  const deltaY = rightPoint.y - leftPoint.y;
-
-  if (deltaX === 0) {
-    return 90;
-  }
-
-  const angle = (Math.atan2(deltaY, deltaX) * 180) / Math.PI;
-  const absoluteAngle = Math.abs(angle);
-
-  return absoluteAngle > 90 ? 180 - absoluteAngle : absoluteAngle;
 }
 
 function getTorsoLean(landmarks) {
@@ -627,6 +553,26 @@ function getBallMotionSnapshot(history) {
   };
 }
 
+function getLatestBallVelocity(history) {
+  const latestFrame = history[history.length - 1];
+  const previousFrame = history[history.length - 2];
+
+  if (!latestFrame || !previousFrame) {
+    return null;
+  }
+
+  const deltaSeconds = (latestFrame.timestamp - previousFrame.timestamp) / 1000;
+
+  if (deltaSeconds <= 0) {
+    return null;
+  }
+
+  const x = (latestFrame.x - previousFrame.x) / deltaSeconds;
+  const y = (latestFrame.y - previousFrame.y) / deltaSeconds;
+
+  return { x, y, speed: Math.hypot(x, y) };
+}
+
 function getActionDetection(motionSnapshot, heldSwing) {
   if (!motionSnapshot.isLeftArmVisible && !motionSnapshot.isRightArmVisible) {
     return {
@@ -810,9 +756,9 @@ function getColorProfileFromVideoRegion(video, canvas, pointA, pointB, anchorPoi
   };
 }
 
-function findLargestColorBlob(mask, width, height, hueValues, saturationValues) {
+function findColorBlobs(mask, width, height, hueValues, saturationValues) {
   const visited = new Uint8Array(mask.length);
-  let bestBlob = null;
+  const blobs = [];
   const queue = [];
 
   for (let startIndex = 0; startIndex < mask.length; startIndex += 1) {
@@ -873,23 +819,31 @@ function findLargestColorBlob(mask, width, height, hueValues, saturationValues) 
       }
     }
 
-    if (!bestBlob || pixelCount > bestBlob.pixelCount) {
-      bestBlob = {
-        pixelCount,
-        minX,
-        minY,
-        maxX,
-        maxY,
-        averageHue: hueTotal / pixelCount,
-        averageSaturation: saturationTotal / pixelCount,
-      };
-    }
+    blobs.push({
+      pixelCount,
+      minX,
+      minY,
+      maxX,
+      maxY,
+      averageHue: hueTotal / pixelCount,
+      averageSaturation: saturationTotal / pixelCount,
+    });
   }
 
-  return bestBlob;
+  return blobs;
 }
 
-function getColorTrackedBall(video, canvas, colorProfile = INITIAL_COLOR_PROFILE) {
+function findLargestColorBlob(mask, width, height, hueValues, saturationValues) {
+  return findColorBlobs(mask, width, height, hueValues, saturationValues)
+    .sort((blobA, blobB) => blobB.pixelCount - blobA.pixelCount)[0] ?? null;
+}
+
+function getColorTrackedBall(
+  video,
+  canvas,
+  colorProfile = INITIAL_COLOR_PROFILE,
+  previousBall = null,
+) {
   if (!canvas) {
     return {
       ball: null,
@@ -944,23 +898,59 @@ function getColorTrackedBall(video, canvas, colorProfile = INITIAL_COLOR_PROFILE
     }
   }
 
-  const blob = findLargestColorBlob(
+  const blobs = findColorBlobs(
     mask,
     canvas.width,
     canvas.height,
     hueValues,
     saturationValues,
   );
+  const largestBlob = blobs
+    .slice()
+    .sort((blobA, blobB) => blobB.pixelCount - blobA.pixelCount)[0] ?? null;
+  const eligibleBlobs = blobs.filter((candidate) => {
+    const candidateWidth = candidate.maxX - candidate.minX + 1;
+    const candidateHeight = candidate.maxY - candidate.minY + 1;
+    const candidateFillRatio = candidate.pixelCount / (candidateWidth * candidateHeight);
 
-  if (!blob || blob.pixelCount < COLOR_TRACKER_MIN_PIXELS) {
+    return (
+      candidate.pixelCount >= COLOR_TRACKER_MIN_PIXELS &&
+      candidate.pixelCount <= mask.length * COLOR_TRACKER_MAX_AREA_RATIO &&
+      Math.max(candidateWidth, candidateHeight) <=
+        Math.max(canvas.width, canvas.height) * COLOR_TRACKER_MAX_DIMENSION_RATIO &&
+      candidateFillRatio >= 0.06
+    );
+  });
+  const previousIsUsable =
+    previousBall &&
+    Number.isFinite(previousBall.normalizedX) &&
+    Number.isFinite(previousBall.normalizedY);
+  const blob = eligibleBlobs.sort((blobA, blobB) => {
+    if (!previousIsUsable) {
+      return blobB.pixelCount - blobA.pixelCount;
+    }
+
+    const getDistanceFromPrevious = (candidate) => {
+      const centerX = (candidate.minX + candidate.maxX + 1) / (2 * canvas.width);
+      const centerY = (candidate.minY + candidate.maxY + 1) / (2 * canvas.height);
+      return Math.hypot(
+        centerX - previousBall.normalizedX,
+        centerY - previousBall.normalizedY,
+      );
+    };
+
+    return getDistanceFromPrevious(blobA) - getDistanceFromPrevious(blobB);
+  })[0] ?? null;
+
+  if (!blob) {
     return {
       ball: null,
       diagnostics: {
-        status: colorPixels > 0 ? 'Color match too small' : 'No matching color',
+        status: colorPixels > 0 ? 'No ball-sized color blob' : 'No matching color',
         colorPixels,
-        colorBlobPixels: blob?.pixelCount ?? 0,
-        colorHue: blob?.averageHue ?? null,
-        colorSaturation: blob?.averageSaturation ?? null,
+        colorBlobPixels: largestBlob?.pixelCount ?? 0,
+        colorHue: largestBlob?.averageHue ?? null,
+        colorSaturation: largestBlob?.averageSaturation ?? null,
       },
     };
   }
@@ -968,19 +958,6 @@ function getColorTrackedBall(video, canvas, colorProfile = INITIAL_COLOR_PROFILE
   const blobWidth = blob.maxX - blob.minX + 1;
   const blobHeight = blob.maxY - blob.minY + 1;
   const fillRatio = blob.pixelCount / (blobWidth * blobHeight);
-
-  if (fillRatio < 0.06) {
-    return {
-      ball: null,
-      diagnostics: {
-        status: 'Blob too sparse',
-        colorPixels,
-        colorBlobPixels: blob.pixelCount,
-        colorHue: blob.averageHue,
-        colorSaturation: blob.averageSaturation,
-      },
-    };
-  }
 
   const scaleX = video.videoWidth / canvas.width;
   const scaleY = video.videoHeight / canvas.height;
@@ -1596,14 +1573,14 @@ function getReadyPositionAnalysis(landmarks, measurements) {
   };
 }
 
-function getSpokenReview(analysis, hitCount) {
-  if (analysis.score === null) {
-    return `That is ${hitCount} hits. Step back so I can see your full body before the next review.`;
+function getSpokenReview(review) {
+  if (!review) {
+    return 'DinkAI voice reviews are ready. Complete four likely dink contacts to receive a review.';
   }
 
-  const coachingTips = analysis.tips.slice(0, 2).join(' ');
-
-  return `That is ${hitCount} hits. Your ready position score is ${analysis.score} out of 100: ${analysis.status}. ${coachingTips}`;
+  return `Four-hit dink review. Your score is ${review.score} out of 100. ${review.tips
+    .slice(0, 2)
+    .join(' ')}`;
 }
 
 function speakWithBrowserVoice(text) {
@@ -1666,9 +1643,9 @@ function App() {
   const pixelSamplerCanvasRef = useRef(null);
   const colorProfileRef = useRef(INITIAL_COLOR_PROFILE);
   const paddleColorProfileRef = useRef({ ...INITIAL_COLOR_PROFILE, hueMin: 0, hueMax: 360 });
-  const lastCocoBallRef = useRef(null);
-  const lastCocoSeenAtRef = useRef(0);
+  const paddleHoldingArmRef = useRef('right');
   const lastVideoTimeRef = useRef(-1);
+  const motionHistoryRef = useRef([]);
   const smoothedCoachLandmarksRef = useRef([]);
   const lastCoachUpdateTimeRef = useRef(0);
   const latestBallRef = useRef(null);
@@ -1676,10 +1653,12 @@ function App() {
   const latestPaddleRef = useRef(null);
   const latestPaddleSearchAreaRef = useRef(null);
   const ballDetectionTimeoutRef = useRef(null);
+  const colorBallTrackingTimeoutRef = useRef(null);
   const isBallDetectionStoppedRef = useRef(false);
-  const hitArmedRef = useRef(true);
-  const lastHitAtRef = useRef(0);
-  const lastVoiceReviewHitCountRef = useRef(0);
+  const dinkHitBatchRef = useRef([]);
+  const lastDinkHitAtRef = useRef(0);
+  const pendingDinkContactRef = useRef(null);
+  const lastVoiceReviewRef = useRef(null);
   const voiceAudioRef = useRef(null);
   const voiceAudioUrlRef = useRef(null);
   const [status, setStatus] = useState('Loading pose model...');
@@ -1688,6 +1667,8 @@ function App() {
   const [coachLandmarks, setCoachLandmarks] = useState([]);
   const [motionHistory, setMotionHistory] = useState([]);
   const [heldSwing, setHeldSwing] = useState(null);
+  const [dinkHitBatch, setDinkHitBatch] = useState([]);
+  const [latestDinkReview, setLatestDinkReview] = useState(null);
   const [ballDebug, setBallDebug] = useState(INITIAL_BALL_DEBUG);
   const [paddleDebug, setPaddleDebug] = useState(INITIAL_PADDLE_DEBUG);
   const [pixelSample, setPixelSample] = useState(INITIAL_PIXEL_SAMPLE);
@@ -1700,11 +1681,11 @@ function App() {
   const [calibrationTarget, setCalibrationTarget] = useState('ball');
   const [paddleHoldingArm, setPaddleHoldingArm] = useState('right');
   const [sampleBox, setSampleBox] = useState(INITIAL_SAMPLE_BOX);
-  const [hitCount, setHitCount] = useState(0);
   const [voiceReviewsEnabled, setVoiceReviewsEnabled] = useState(true);
   const [voiceStatus, setVoiceStatus] = useState('Voice reviews ready');
   colorProfileRef.current = colorProfile;
   paddleColorProfileRef.current = paddleColorProfile;
+  paddleHoldingArmRef.current = paddleHoldingArm;
   const postureMeasurements = useMemo(
     () => getPostureMeasurements(latestLandmarks),
     [latestLandmarks],
@@ -1793,22 +1774,48 @@ function App() {
   }, []);
 
   const handleVoiceTest = useCallback(() => {
-    playVoiceReview(getSpokenReview(readyPositionAnalysis, hitCount || HITS_PER_REVIEW));
-  }, [hitCount, playVoiceReview, readyPositionAnalysis]);
+    playVoiceReview(getSpokenReview(latestDinkReview));
+  }, [latestDinkReview, playVoiceReview]);
 
   useEffect(() => {
-    if (
-      hitCount > 0 &&
-      hitCount % HITS_PER_REVIEW === 0 &&
-      lastVoiceReviewHitCountRef.current !== hitCount
-    ) {
-      lastVoiceReviewHitCountRef.current = hitCount;
+    if (latestDinkReview && lastVoiceReviewRef.current !== latestDinkReview) {
+      lastVoiceReviewRef.current = latestDinkReview;
       if (voiceReviewsEnabled) {
-        playVoiceReview(getSpokenReview(readyPositionAnalysis, hitCount));
+        playVoiceReview(getSpokenReview(latestDinkReview));
       }
     }
-  }, [hitCount, playVoiceReview, readyPositionAnalysis, voiceReviewsEnabled]);
+  }, [latestDinkReview, playVoiceReview, voiceReviewsEnabled]);
 
+  const resetDinkReview = useCallback(() => {
+    dinkHitBatchRef.current = [];
+    lastDinkHitAtRef.current = 0;
+    pendingDinkContactRef.current = null;
+    setDinkHitBatch([]);
+    setLatestDinkReview(null);
+  }, []);
+
+  const recordDinkHit = useCallback((candidate, landmarks) => {
+    const measurements = getPostureMeasurements(landmarks);
+    const readyPosition = getReadyPositionAnalysis(landmarks, measurements);
+    const nextHit = {
+      ...candidate,
+      readyScore: readyPosition.score,
+      wristHeightStatus: measurements.wristHeightStatus,
+    };
+    const nextBatch = [...dinkHitBatchRef.current, nextHit];
+
+    lastDinkHitAtRef.current = candidate.timestamp;
+
+    if (nextBatch.length === HITS_PER_DINK_REVIEW) {
+      setLatestDinkReview(createDinkReview(nextBatch));
+      dinkHitBatchRef.current = [];
+      setDinkHitBatch([]);
+      return;
+    }
+
+    dinkHitBatchRef.current = nextBatch;
+    setDinkHitBatch(nextBatch);
+  }, []);
   const samplePixelAtPoint = useCallback((point, profile = colorProfile) => {
     const video = videoRef.current;
     const canvas = pixelSamplerCanvasRef.current;
@@ -1959,6 +1966,73 @@ function App() {
     setSampleBox(INITIAL_SAMPLE_BOX);
   }, []);
 
+  const runColorBallTracking = useCallback(() => {
+    const video = videoRef.current;
+
+    if (!video || isBallDetectionStoppedRef.current) {
+      return;
+    }
+
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      const startedAt = performance.now();
+      const colorResult = getColorTrackedBall(
+        video,
+        colorTrackerCanvasRef.current,
+        colorProfileRef.current,
+        latestBallRef.current,
+      );
+      const timestamp = performance.now();
+      const colorBall = colorResult?.ball ?? null;
+      const currentBall = latestBallRef.current;
+      const activeBall = colorBall
+        ? { ...colorBall, timestamp }
+        : currentBall && timestamp - currentBall.timestamp <= BALL_TRACK_HOLD_MS
+          ? currentBall
+          : null;
+
+      if (colorBall) {
+        ballHistoryRef.current = addBallFrame(
+          ballHistoryRef.current,
+          colorBall,
+          timestamp,
+          'Color Tracker',
+        );
+      }
+
+      latestBallRef.current = activeBall;
+      const ballMotion = getBallMotionSnapshot(ballHistoryRef.current);
+
+      setBallDebug((currentDebug) => ({
+        ...currentDebug,
+        status: colorBall
+          ? 'Tracking color blob'
+          : colorResult?.diagnostics.status ?? 'Color tracker waiting',
+        detected: Boolean(activeBall),
+        x: activeBall?.normalizedX ?? null,
+        y: activeBall?.normalizedY ?? null,
+        size: activeBall?.normalizedSize ?? null,
+        confidence: activeBall?.confidence ?? null,
+        speed: ballMotion.speed,
+        direction: ballMotion.direction,
+        framesTracked: ballMotion.framesTracked,
+        fps: timestamp > startedAt ? 1000 / (timestamp - startedAt) : null,
+        source: activeBall?.source ?? 'None',
+        colorTrackerStatus: colorResult?.diagnostics.status ?? 'Waiting',
+        colorPixels: colorResult?.diagnostics.colorPixels ?? 0,
+        colorBlobPixels: colorResult?.diagnostics.colorBlobPixels ?? 0,
+        colorHue: colorResult?.diagnostics.colorHue ?? null,
+        colorSaturation: colorResult?.diagnostics.colorSaturation ?? null,
+      }));
+    }
+
+    if (!isBallDetectionStoppedRef.current) {
+      colorBallTrackingTimeoutRef.current = window.setTimeout(
+        runColorBallTracking,
+        COLOR_TRACKER_INTERVAL_MS,
+      );
+    }
+  }, []);
+
   const runBallDetection = useCallback(async () => {
     const video = videoRef.current;
     const detector = ballDetectorRef.current;
@@ -1968,121 +2042,55 @@ function App() {
     }
 
     if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-      const startedAt = performance.now();
-
       try {
-        const colorStartedAt = performance.now();
-        const colorResult = getColorTrackedBall(
-          video,
-          colorTrackerCanvasRef.current,
-          colorProfileRef.current,
-        );
-        const colorInferenceMs = performance.now() - colorStartedAt;
-        const colorBall = colorResult?.ball ?? null;
-
+        const startedAt = performance.now();
         const predictions = await detector.detect(
           video,
           8,
           BALL_DETECTION_MIN_SCORE,
         );
-        const inferenceMs = performance.now() - startedAt;
         const cocoBall = getBestBallPrediction(predictions, video);
+        const timestamp = performance.now();
 
         if (cocoBall) {
-          lastCocoBallRef.current = cocoBall;
-          lastCocoSeenAtRef.current = performance.now();
-        }
-
-        const ball = cocoBall ?? colorBall;
-        const source = cocoBall
-          ? 'COCO-SSD'
-          : colorBall
-            ? 'Color Tracker'
-              : 'None';
-        const timestamp = performance.now();
-
-        if (ball) {
           ballHistoryRef.current = addBallFrame(
             ballHistoryRef.current,
-            ball,
+            cocoBall,
             timestamp,
-            source,
+            'COCO-SSD',
           );
+          latestBallRef.current = { ...cocoBall, timestamp };
         }
 
         const ballMotion = getBallMotionSnapshot(ballHistoryRef.current);
 
-        latestBallRef.current = ball;
-        setBallDebug({
-          status: 'Ready',
-          detected: Boolean(ball),
-          x: ball?.normalizedX ?? null,
-          y: ball?.normalizedY ?? null,
-          size: ball?.normalizedSize ?? null,
-          confidence: ball?.confidence ?? null,
+        setBallDebug((currentDebug) => ({
+          ...currentDebug,
+          status: cocoBall ? 'COCO-SSD confirmed ball' : currentDebug.status,
+          detected: Boolean(latestBallRef.current),
+          x: latestBallRef.current?.normalizedX ?? null,
+          y: latestBallRef.current?.normalizedY ?? null,
+          size: latestBallRef.current?.normalizedSize ?? null,
+          confidence: latestBallRef.current?.confidence ?? null,
           speed: ballMotion.speed,
           direction: ballMotion.direction,
           framesTracked: ballMotion.framesTracked,
-          fps:
-            source === 'Color Tracker' && colorInferenceMs > 0
-              ? 1000 / colorInferenceMs
-              : inferenceMs > 0
-                ? 1000 / inferenceMs
-                : null,
-          source,
-          colorTrackerStatus: colorResult?.diagnostics.status ?? 'Waiting',
-          colorPixels: colorResult?.diagnostics.colorPixels ?? 0,
-          colorBlobPixels: colorResult?.diagnostics.colorBlobPixels ?? 0,
-          colorHue: colorResult?.diagnostics.colorHue ?? null,
-          colorSaturation: colorResult?.diagnostics.colorSaturation ?? null,
-        });
+          fps: timestamp > startedAt ? 1000 / (timestamp - startedAt) : null,
+          source: latestBallRef.current?.source ?? 'None',
+        }));
       } catch (detectorError) {
         console.error(detectorError);
-        const colorResult = getColorTrackedBall(
-          video,
-          colorTrackerCanvasRef.current,
-          colorProfileRef.current,
-        );
-        const ball = colorResult?.ball ?? null;
-        const timestamp = performance.now();
-
-        if (ball) {
-          ballHistoryRef.current = addBallFrame(
-            ballHistoryRef.current,
-            ball,
-            timestamp,
-            'Color Tracker',
-          );
-        }
-
-        const ballMotion = getBallMotionSnapshot(ballHistoryRef.current);
-
-        latestBallRef.current = ball;
-        setBallDebug({
-          status: ball ? 'COCO error, using color tracker' : 'Detector error',
-          detected: Boolean(ball),
-          x: ball?.normalizedX ?? null,
-          y: ball?.normalizedY ?? null,
-          size: ball?.normalizedSize ?? null,
-          confidence: ball?.confidence ?? null,
-          speed: ballMotion.speed,
-          direction: ballMotion.direction,
-          framesTracked: ballMotion.framesTracked,
-          fps: null,
-          source: ball ? 'Color Tracker' : 'None',
-          colorTrackerStatus: colorResult?.diagnostics.status ?? 'Waiting',
-          colorPixels: colorResult?.diagnostics.colorPixels ?? 0,
-          colorBlobPixels: colorResult?.diagnostics.colorBlobPixels ?? 0,
-          colorHue: colorResult?.diagnostics.colorHue ?? null,
-          colorSaturation: colorResult?.diagnostics.colorSaturation ?? null,
-        });
+        setBallDebug((currentDebug) => ({
+          ...currentDebug,
+          status: 'COCO unavailable; using color tracker',
+        }));
       }
     }
 
     if (!isBallDetectionStoppedRef.current) {
       ballDetectionTimeoutRef.current = window.setTimeout(
         runBallDetection,
-        BALL_DETECTION_INTERVAL_MS,
+        COCO_BALL_DETECTION_INTERVAL_MS,
       );
     }
   }, []);
@@ -2150,10 +2158,12 @@ function App() {
           video,
           paddleTrackerCanvasRef.current,
           detectedLandmarks,
-          paddleHoldingArm,
+          paddleHoldingArmRef.current,
           paddleColorProfileRef.current,
         );
-        latestPaddleRef.current = paddleResult.paddle;
+        latestPaddleRef.current = paddleResult.paddle
+          ? { ...paddleResult.paddle, timestamp: nowInMs }
+          : null;
         latestPaddleSearchAreaRef.current = paddleResult.searchArea;
         setPaddleDebug({
           status: paddleResult.diagnostics.status,
@@ -2168,54 +2178,63 @@ function App() {
           colorPixels: paddleResult.diagnostics.colorPixels,
           colorBlobPixels: paddleResult.diagnostics.colorBlobPixels,
         });
-        setMotionHistory((history) => {
-          const nextHistory = addMotionFrame(
-            history,
-            detectedLandmarks,
-            nowInMs,
-          );
-          const nextMotionSnapshot = getMotionSnapshot(nextHistory);
-          const leftWristVelocity = nextMotionSnapshot.leftWristVelocity ?? 0;
-          const rightWristVelocity = nextMotionSnapshot.rightWristVelocity ?? 0;
-          const peakWristVelocity = Math.max(
-            leftWristVelocity,
-            rightWristVelocity,
-          );
-          const hasVisibleArm =
-            nextMotionSnapshot.isLeftArmVisible ||
-            nextMotionSnapshot.isRightArmVisible;
+        const nextHistory = addMotionFrame(
+          motionHistoryRef.current,
+          detectedLandmarks,
+          nowInMs,
+        );
+        motionHistoryRef.current = nextHistory;
+        setMotionHistory(nextHistory);
+        const nextMotionSnapshot = getMotionSnapshot(nextHistory);
+        const leftWristVelocity = nextMotionSnapshot.leftWristVelocity ?? 0;
+        const rightWristVelocity = nextMotionSnapshot.rightWristVelocity ?? 0;
+        const peakWristVelocity = Math.max(
+          leftWristVelocity,
+          rightWristVelocity,
+        );
+        const hasVisibleArm =
+          nextMotionSnapshot.isLeftArmVisible ||
+          nextMotionSnapshot.isRightArmVisible;
 
-          if (!hasVisibleArm) {
-            setHeldSwing(null);
-            hitArmedRef.current = true;
-          } else if (peakWristVelocity >= SWING_VELOCITY_THRESHOLD) {
-            setHeldSwing({
-              dominantSide:
-                leftWristVelocity >= rightWristVelocity ? 'Left' : 'Right',
-              peakVelocity: peakWristVelocity,
-              expiresAt: nowInMs + SWING_HOLD_MS,
-            });
-            if (
-              hitArmedRef.current &&
-              nowInMs - lastHitAtRef.current >= HIT_COUNT_COOLDOWN_MS
-            ) {
-              hitArmedRef.current = false;
-              lastHitAtRef.current = nowInMs;
-              setHitCount((currentHitCount) => currentHitCount + 1);
-            }
-          } else {
-            if (peakWristVelocity < HIT_REARM_VELOCITY_THRESHOLD) {
-              hitArmedRef.current = true;
-            }
-            setHeldSwing((currentSwing) =>
-              currentSwing && currentSwing.expiresAt > nowInMs
-                ? currentSwing
-                : null,
-            );
-          }
+        if (!hasVisibleArm) {
+          setHeldSwing(null);
+          pendingDinkContactRef.current = null;
+        } else if (peakWristVelocity >= SWING_VELOCITY_THRESHOLD) {
+          setHeldSwing({
+            dominantSide:
+              leftWristVelocity >= rightWristVelocity ? 'Left' : 'Right',
+            peakVelocity: peakWristVelocity,
+            expiresAt: nowInMs + SWING_HOLD_MS,
+          });
+        } else {
+          setHeldSwing((currentSwing) =>
+            currentSwing && currentSwing.expiresAt > nowInMs
+              ? currentSwing
+              : null,
+          );
+        }
 
-          return nextHistory;
+        const dinkContactUpdate = getDinkContactUpdate({
+          timestamp: nowInMs,
+          lastHitAt: lastDinkHitAtRef.current,
+          ball: latestBallRef.current,
+          paddle: latestPaddleRef.current,
+          ballSpeed: getBallMotionSnapshot(ballHistoryRef.current).speed,
+          ballVelocity: getLatestBallVelocity(ballHistoryRef.current),
+          pendingContact: pendingDinkContactRef.current,
         });
+        pendingDinkContactRef.current = dinkContactUpdate.pendingContact;
+
+        if (dinkContactUpdate.hit) {
+          recordDinkHit(
+            {
+              ...dinkContactUpdate.hit,
+              side: leftWristVelocity >= rightWristVelocity ? 'Left' : 'Right',
+              wristVelocity: peakWristVelocity,
+            },
+            detectedLandmarks,
+          );
+        }
         smoothedCoachLandmarksRef.current = smoothLandmarks(
           smoothedCoachLandmarksRef.current,
           detectedLandmarks,
@@ -2234,7 +2253,7 @@ function App() {
     }
 
     animationFrameRef.current = window.requestAnimationFrame(predictWebcam);
-  }, [drawPose, paddleHoldingArm]);
+  }, [drawPose, recordDinkHit]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2243,6 +2262,13 @@ function App() {
       try {
         isBallDetectionStoppedRef.current = false;
         ballHistoryRef.current = [];
+        motionHistoryRef.current = [];
+        dinkHitBatchRef.current = [];
+        lastDinkHitAtRef.current = 0;
+        pendingDinkContactRef.current = null;
+        setMotionHistory([]);
+        setDinkHitBatch([]);
+        setLatestDinkReview(null);
         latestBallRef.current = null;
         latestPaddleRef.current = null;
         latestPaddleSearchAreaRef.current = null;
@@ -2273,6 +2299,7 @@ function App() {
         await waitForVideoMetadata(video);
         await video.play();
 
+        runColorBallTracking();
         setBallDebug((currentDebug) => ({
           ...currentDebug,
           status: 'Loading ball detector...',
@@ -2297,16 +2324,10 @@ function App() {
           })
           .catch((detectorError) => {
             console.error(detectorError);
-            setBallDebug({
-              status: 'Detector unavailable',
-              detected: false,
-              x: null,
-              y: null,
-              size: null,
-              confidence: null,
-              fps: null,
-              source: 'None',
-            });
+            setBallDebug((currentDebug) => ({
+              ...currentDebug,
+              status: 'COCO unavailable; color tracker still active',
+            }));
           });
 
         setStatus('Starting pose tracker...');
@@ -2344,6 +2365,9 @@ function App() {
       if (ballDetectionTimeoutRef.current) {
         window.clearTimeout(ballDetectionTimeoutRef.current);
       }
+      if (colorBallTrackingTimeoutRef.current) {
+        window.clearTimeout(colorBallTrackingTimeoutRef.current);
+      }
       streamRef.current?.getTracks().forEach((track) => track.stop());
       landmarkerRef.current?.close();
       ballDetectorRef.current?.dispose();
@@ -2353,7 +2377,7 @@ function App() {
         URL.revokeObjectURL(voiceAudioUrlRef.current);
       }
     };
-  }, [predictWebcam, runBallDetection]);
+  }, [predictWebcam, runBallDetection, runColorBallTracking]);
 
   return (
     <main className="app">
@@ -2371,8 +2395,6 @@ function App() {
           onPointerMove={handleVideoFramePointerMove}
           onPointerUp={handleVideoFramePointerUp}
           onPointerCancel={handleVideoFramePointerCancel}
-          role="button"
-          tabIndex={0}
           aria-label="Webcam feed. Click to inspect a pixel, or drag around the selected calibration target."
         >
           <video ref={videoRef} playsInline muted />
@@ -2441,6 +2463,77 @@ function App() {
               My Left
             </label>
           </fieldset>
+        </section>
+
+        <section className="dinkReviewPanel" aria-labelledby="dink-review-heading">
+          <div className="dinkReviewHeader">
+            <div>
+              <h2 id="dink-review-heading">Four-Hit Dink Review</h2>
+              <p>
+                Live tracking continues throughout the rally. DinkAI delivers
+                one coaching review after four likely paddle-and-ball contacts.
+              </p>
+            </div>
+            <button type="button" className="secondaryButton" onClick={resetDinkReview}>
+              Reset batch
+            </button>
+          </div>
+
+          <div className="dinkReviewContent">
+            <div className="hitProgress" aria-label={`${dinkHitBatch.length} of 4 hits collected`}>
+              <span className="scoreLabel">Next review</span>
+              <strong>{dinkHitBatch.length} / {HITS_PER_DINK_REVIEW}</strong>
+              <div className="hitDots" aria-hidden="true">
+                {Array.from({ length: HITS_PER_DINK_REVIEW }, (_, index) => (
+                  <span
+                    className={index < dinkHitBatch.length ? 'hitDot hitDotActive' : 'hitDot'}
+                    key={index}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {latestDinkReview ? (
+              <div className="dinkReviewResult" aria-live="polite">
+                <div className="reviewScore">
+                  <span className="scoreLabel">Last four-hit score</span>
+                  <strong>{latestDinkReview.score}</strong>
+                  <span className="scoreMax">/ 100</span>
+                </div>
+                <div className="reviewStats">
+                  <span>
+                    Ready position: {latestDinkReview.averageReadyScore === null
+                      ? 'not visible'
+                      : `${Math.round(latestDinkReview.averageReadyScore)} / 100`}
+                  </span>
+                  <span>
+                    Contact spacing: {latestDinkReview.averageContactDistance === null
+                      ? '-'
+                      : latestDinkReview.averageContactDistance.toFixed(3)}
+                  </span>
+                  <span>
+                    Swing consistency: {latestDinkReview.velocityVariation === null
+                      ? '-'
+                      : `${Math.round((1 - Math.min(1, latestDinkReview.velocityVariation)) * 100)}%`}
+                  </span>
+                </div>
+                <div className="reviewTips">
+                  <h3>How to improve the next four</h3>
+                  <ul>
+                    {latestDinkReview.tips.map((tip) => (
+                      <li key={tip}>{tip}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : (
+              <p className="dinkReviewEmpty">
+                Waiting for four likely contacts. A hit is counted when a fresh
+                ball approaches the calibrated paddle and then travels away
+                from it.
+              </p>
+            )}
+          </div>
         </section>
 
         <section className="coachPanel" aria-labelledby="coach-heading">
@@ -2552,7 +2645,7 @@ function App() {
             <div>
               <h2 id="voice-heading">Voice Reviews</h2>
               <p>
-                DinkAI gives a ready-position review after every {HITS_PER_REVIEW} estimated hits.
+                DinkAI speaks each completed {HITS_PER_DINK_REVIEW}-hit dink review.
               </p>
             </div>
             <span className={voiceReviewsEnabled ? 'actionBadge actionBadgeActive' : 'actionBadge'}>
@@ -2562,9 +2655,9 @@ function App() {
 
           <div className="voiceReviewContent">
             <div className="voiceReviewCount">
-              <span>Estimated hits</span>
-              <strong>{hitCount}</strong>
-              <small>Next review in {HITS_PER_REVIEW - (hitCount % HITS_PER_REVIEW)} hits</small>
+              <span>Last review score</span>
+              <strong>{latestDinkReview?.score ?? '--'}</strong>
+              <small>Next review: {dinkHitBatch.length} / {HITS_PER_DINK_REVIEW} hits</small>
             </div>
             <p className="voiceReviewStatus" aria-live="polite">{voiceStatus}</p>
             <div className="voiceReviewActions">
